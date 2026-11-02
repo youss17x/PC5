@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: youss17x <youss17x@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 21:27:37 +0000
+Subject: [PATCH] PC5: frame generation stays engaged through one late refresh
+
+Project IGI at 59.94 Hz with frame generation on logged a steady
+"pw_framegen: frame 17.7 ms late; shown as it is" and dropped interpolation
+for eight frames each time. 17.7 ms is one refresh. The interval was taken
+from the start of the present, so the refresh present_generated waits out
+was counted as the game running late.
+
+sc->last is now when that present returned. A gap of less than 0.6 of a
+period while generation is on (one refresh: 17.7 ms at 59.94 Hz, about 8 ms
+at 119.88 Hz) retimes the next frame to one period from now and stays
+engaged. A longer gap is still shown as it is. Not tried on a console.
+---
+ wine/ps5/pw_framegen.cpp | 45 ++++++++++++++++++++++++++++------------
+ 1 file changed, 32 insertions(+), 13 deletions(-)
+
+diff --git a/wine/ps5/pw_framegen.cpp b/wine/ps5/pw_framegen.cpp
+index 646d788..0f0528c 100644
+--- a/wine/ps5/pw_framegen.cpp
++++ b/wine/ps5/pw_framegen.cpp
+@@ -13,7 +13,9 @@
+  * never queues: each of its frames is two refreshes, one of them generated.
+  * A game whose frames come later than that is shown as it is, and frames
+  * are generated again once eight in a row keep time; the first of those
+- * only primes the interpolator (its reset). */
++ * only primes the interpolator (its reset). One refresh late stays
++ * generated: the time the present itself waited is not the game running
++ * late (Project IGI's steady 17.7 ms at 59.94 Hz). */
+ #include "pw_framegen.h"
+ #include "pw_framegen_vk.h"
+ #include "ps5_framegen.h"
+@@ -577,31 +579,48 @@ VKAPI_ATTR VkResult VKAPI_CALL wrap_QueuePresentKHR(VkQueue queue, const VkPrese
+     }
+ 
+     settle_rate();
+-    /* The hold: a frame at most every k_period. */
++    /* The hold: a frame at most every k_period. sc->last is when the previous
++     * present returned, not when this one was asked for. present_generated waits
++     * out a refresh, and counting that wait made the next frame look one refresh
++     * late: Project IGI at 59.94 Hz logged a steady 17.7 ms and dropped
++     * interpolation for k_settle frames each time. One refresh late (under 0.6 of
++     * a period) stays engaged and the next frame is due a period from now. A
++     * longer gap is still shown as it is. */
+     sleep_until(sc->next_due);
+     now = now_seconds();
+     interval = sc->last ? now - sc->last : 0.0;
+-    sc->last = now;
+     sc->next_due = (sc->next_due > now - k_period ? sc->next_due : now) + k_period;
+     if (sc->frames && interval > 1.25 * k_period)
+     {
+-        if (sc->engaged)
+-            fprintf(stderr, "pw_framegen: frame %.1f ms late; shown as it is\n", (interval - k_period) * 1e3);
+-        sc->late++;
+-        sc->on_time = 0;
+-        sc->engaged = false;
++        const double late = interval - k_period;
++        if (sc->engaged && late < 0.6 * k_period)
++            sc->next_due = now + k_period;
++        else
++        {
++            if (sc->engaged)
++                fprintf(stderr, "pw_framegen: frame %.1f ms late; shown as it is\n", late * 1e3);
++            sc->late++;
++            sc->on_time = 0;
++            sc->engaged = false;
++        }
+     }
+     else if (sc->on_time < k_settle)
+         sc->on_time++;
+     sc->frames++;
+     log_state(sc, now);
+ 
++    VkResult result;
+     if (sc->on_time < k_settle)
+-        return next.QueuePresentKHR(queue, info);
+-    /* Engaging: the first frame only primes the interpolator. */
+-    bool reset = !sc->engaged;
+-    sc->engaged = true;
+-    return present_generated(sc, queue, info, reset);
++        result = next.QueuePresentKHR(queue, info);
++    else
++    {
++        /* Engaging: the first frame only primes the interpolator. */
++        bool reset = !sc->engaged;
++        sc->engaged = true;
++        result = present_generated(sc, queue, info, reset);
++    }
++    sc->last = now_seconds();
++    return result;
+ }
+ }
+ 
+-- 
+2.39.5
+

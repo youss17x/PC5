@@ -570,6 +570,7 @@ controller's speaker.
 | # | Do | Expect | Log |
 |---|---|---|---|
 | 325 | Project IGI with Aspect ratio Stretch (or any game that opens a 111x1 swapchain before its picture) | the game's picture, not a flash of one line stretched over the screen | `wsi/videoout: a 111x1 helper swapchain is left at its own size, not across 1920x1080 framebuffers`; the game's own size still `presents stretched` |
+| 326 | Project IGI with Frame generation 30 → 60, once it is moving (Show FPS on) | it stays smooth, the overlay near 60, not a stutter every few frames | `pw_framegen: … engaged=1`. Not a `17.7 ms late` line on every frame. A scene that really falls behind still logs `shown as it is` |
 
 ## Custom media navigation changes (pending on PS5)
 
