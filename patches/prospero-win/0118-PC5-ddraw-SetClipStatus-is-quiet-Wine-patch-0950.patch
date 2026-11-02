@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: youss17x <youss17x@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 21:29:26 +0000
+Subject: [PATCH] PC5: ddraw's SetClipStatus is quiet (Wine patch 0950)
+
+Project IGI calls IDirect3DDevice7::SetClipStatus twice a frame. Wine's
+implementation returns D3D_OK and logged a FIXME, which filled the log (the
+two calls pass different pointers, so only one collapsed). The FIXME is a
+TRACE. Nothing is stored, and GetClipStatus is unchanged. Not tried on a
+console.
+---
+ PUBLICATION_ALLOWLIST.txt                     |  1 +
+ docs/WINE_PS5_BUILD.md                        |  1 +
+ ...950-ddraw-ps5-setclipstatus-is-quiet.patch | 31 +++++++++++++++++++
+ 3 files changed, 33 insertions(+)
+ create mode 100644 wine/patches/0950-ddraw-ps5-setclipstatus-is-quiet.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 805a821..c251630 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -612,6 +612,7 @@ wine/patches/0946-win32u-ps5-report-the-refresh-rate-asked-of-the-display.patch
+ wine/patches/0947-win32u-a-virtual-desktop-offers-the-display-s-rate.patch
+ wine/patches/0948-ntdll-ps5-gather-small-writes.patch
+ wine/patches/0949-mmdevapi-ps5-the-speakers-follow-the-driver.patch
++wine/patches/0950-ddraw-ps5-setclipstatus-is-quiet.patch
+ wine/patches/0953-wow64-ps5-a-32-bit-allocation-stays-below-the-process-limit.patch
+ wine/patches/0954-server-ps5-resolve-an-opened-file-s-directory-once.patch
+ wine/patches/0955-ntdll-ps5-keep-the-directories-a-process-resolved.patch
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 1918750..d1e0634 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -157,6 +157,7 @@ before evaluating a candidate built from that cache.
+ | 0947 | `win32u` (Mihawk OS 1188): in a virtual desktop, the virtual source starts at the display's own rate and keeps the modes it generated, so 120 Hz modes stay offered after a game's 60 Hz mode change |
+ | 0948 | `ntdll`: on PS5, a synchronous write of 4 KiB or less to a regular file (no event, APC, write-through or unbuffered I/O) is kept and written with the ones after it at the same handle's next position, in one `pwrite` of up to 64 KiB; any other use of a file (`server_get_unix_fd`, a name opened or looked at, `NtClose`, `NtDuplicateObject`, the process's end) writes them first. The console's kernel takes about a millisecond a write: Aggelos 2 saved its config 4 bytes at a time on every menu picture |
+ | 0949 | `mmdevapi`: on PS5, the audio driver's `PKEY_AudioEndpoint_PhysicalSpeakers` replaces the one kept in the registry each time the devices are listed. mmdevapi kept the first it stored, so a prefix that once ran in stereo told DirectSound games stereo after a game's Sound output in PC5 was set to 5.1 or 7.1 (`WINE_PS5_SPEAKERS`). A driver without an answer leaves what is kept |
++| 0950 | `ddraw`: on PS5, `IDirect3DDevice7::SetClipStatus` is traced instead of a FIXME. It still returns `D3D_OK` and stores nothing (`GetClipStatus` is unchanged). Project IGI calls it twice a frame, and the stub's FIXME filled the log |
+ | 0953 | `wow64`: a 32-bit caller's allocation with its own address requirements (an alignment) and no highest address is kept below the 32-bit process's limit, as on Windows; it landed above 4 GiB and the game faulted on the address's low half. From PS5_MihawkOS |
+ | 0954 | `server`: on PS5, an opened file's directory is resolved with `realpath` once and kept (64 entries, checked by device and inode), so an open costs two system calls instead of one a path component. From PS5_MihawkOS (its 2080) |
+ | 0955 | `ntdll`: on PS5, the directories a process resolved are kept by their upper-cased Windows path (1024 slots) and a lookup starts from the longest one, checked with one `fstatat`; a directory's case sensitivity is not asked (the console's disk is). From PS5_MihawkOS (its 2081) |
+diff --git a/wine/patches/0950-ddraw-ps5-setclipstatus-is-quiet.patch b/wine/patches/0950-ddraw-ps5-setclipstatus-is-quiet.patch
+new file mode 100644
+index 0000000..a0a5002
+--- /dev/null
++++ b/wine/patches/0950-ddraw-ps5-setclipstatus-is-quiet.patch
+@@ -0,0 +1,31 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: youss17x <youss17x@users.noreply.github.com>
++Date: Mon, 2 Nov 2026 21:29:26 +0000
++Subject: [PATCH] ddraw: PS5: SetClipStatus is quiet.
++
++Project IGI calls IDirect3DDevice7::SetClipStatus twice a frame. The stub
++returns D3D_OK and used to log a FIXME, which filled the log: the two calls
++pass different pointers, so only one of them collapsed. Nothing is stored.
++GetClipStatus is unchanged.
++---
++ dlls/ddraw/device.c | 4 +++-
++ 1 file changed, 3 insertions(+), 1 deletion(-)
++
++diff --git a/dlls/ddraw/device.c b/dlls/ddraw/device.c
++index 44f9973..60eeb0f 100644
++--- a/dlls/ddraw/device.c
+++++ b/dlls/ddraw/device.c
++@@ -3779,7 +3779,9 @@ static HRESULT WINAPI d3d_device2_End(IDirect3DDevice2 *iface, DWORD flags)
++  *****************************************************************************/
++ static HRESULT WINAPI d3d_device7_SetClipStatus(IDirect3DDevice7 *iface, D3DCLIPSTATUS *clip_status)
++ {
++-    FIXME("iface %p, clip_status %p stub!\n", iface, clip_status);
+++    /* PS5: quiet. Project IGI calls this twice a frame and the stub's FIXME filled
+++     * the log. Nothing is stored; GetClipStatus is unchanged. */
+++    TRACE("iface %p, clip_status %p.\n", iface, clip_status);
++ 
++     return D3D_OK;
++ }
++-- 
++2.39.5
++
+-- 
+2.39.5
+
