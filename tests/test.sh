@@ -186,8 +186,9 @@ grep -q GameNxApp "$out/wine-dialog/dialog_func.c" || { echo "test_wine_dialog: 
 cc -std=c11 -Wall -Wextra -Werror -I"$out/wine-dialog" tests/test_wine_dialog.c -o "$out/test_wine_dialog"
 "$out/test_wine_dialog"
 
-# patches/radv 0003 and 0005: which window's picture has the console's display, with the
-# swapchains games' logs showed (tests/test_videoout.c); the rules' header from the patch.
+# patches/radv 0003, 0005, 0007 and 0009: which window's picture has the console's
+# display, and that a helper's picture is not drawn across the framebuffer
+# (tests/test_videoout.c); the rules' header from the patch.
 mkdir -p "$out/videoout"
 for patch in patches/radv/*.patch; do
     grep -q '^+++ b/src/vulkan/wsi/wsi_common_videoout_takeover\.h' "$patch" || continue

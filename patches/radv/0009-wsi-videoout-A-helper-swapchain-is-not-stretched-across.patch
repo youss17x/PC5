@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: youss17x <youss17x@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 21:25:49 +0000
+Subject: [PATCH] wsi/videoout: A helper swapchain is not stretched across the
+ framebuffer
+
+With PW_PC5_STRETCH=1 every scaled swapchain was drawn across the framebuffer,
+including a helper. Project IGI opens a 111x1 swapchain before its real window.
+Nothing had presented, so that strip was given the display and stretched to
+1920x1080.
+
+A picture under 320x200 (the same sizes that are not a window's picture: Project
+IGI's, Warcraft III's and Blade & Sword's 111x1, Max Payne 3's 113x2, wined3d's
+10x10) is left at its own size. CreateSwapchain still succeeds. A helper still
+takes a display nobody has presented on, and is still refused once an owner has,
+so the takeover rules and their tests are unchanged.
+---
+ src/vulkan/wsi/wsi_common_videoout.c          | 17 ++++++++++++-----
+ src/vulkan/wsi/wsi_common_videoout_takeover.h | 12 ++++++++++++
+ 2 files changed, 24 insertions(+), 5 deletions(-)
+
+diff --git a/src/vulkan/wsi/wsi_common_videoout.c b/src/vulkan/wsi/wsi_common_videoout.c
+index 82c2573..82f856f 100644
+--- a/src/vulkan/wsi/wsi_common_videoout.c
++++ b/src/vulkan/wsi/wsi_common_videoout.c
+@@ -4,17 +4,24 @@
+    chain->scaled = scaled;
+    chain->target = target;
+    /* PC5's Aspect ratio: PW_PC5_STRETCH=1 in the environment stretches a picture of
+-    * another shape over the whole framebuffer, instead of fitting it with bars. */
++    * another shape over the whole framebuffer, instead of fitting it with bars.
++    * A helper (under 320x200: Project IGI's 111x1, Max Payne 3's 113x2, wined3d's
++    * 10x10) is left at its own size, or a stretch would make the strip the picture. */
+    const char *stretch = getenv("PW_PC5_STRETCH");
+    const bool fill = stretch && stretch[0] == '1' && !stretch[1];
+-   chain->rect = !scaled ? (VkRect2D){.extent = extent}
+-                 : fill  ? (VkRect2D){.extent = target}
+-                         : wsi_videoout_fit_rect(extent, target);
+-   if (scaled)
++   const bool across = wsi_videoout_across_framebuffer(extent.width, extent.height);
++   chain->rect = !scaled || !across ? (VkRect2D){.extent = extent}
++                                     : fill  ? (VkRect2D){.extent = target}
++                                             : wsi_videoout_fit_rect(extent, target);
++   if (scaled && across)
+       fprintf(stderr,
+               "wsi/videoout: a %ux%u swapchain presents %s to %ux%u at (%d, %d) of %ux%u framebuffers (set %u)\n",
+               extent.width, extent.height, fill ? "stretched" : "scaled", chain->rect.extent.width,
+               chain->rect.extent.height, chain->rect.offset.x,
+               chain->rect.offset.y, target.width, target.height, set);
++   else if (scaled)
++      fprintf(stderr,
++              "wsi/videoout: a %ux%u helper swapchain is left at its own size, not across %ux%u framebuffers (set %u)\n",
++              extent.width, extent.height, target.width, target.height, set);
+ 
+    for (uint32_t i = 0; i < num_images; i++) {
+diff --git a/src/vulkan/wsi/wsi_common_videoout_takeover.h b/src/vulkan/wsi/wsi_common_videoout_takeover.h
+index 48e14ee..5f54473 100644
+--- a/src/vulkan/wsi/wsi_common_videoout_takeover.h
++++ b/src/vulkan/wsi/wsi_common_videoout_takeover.h
+@@ -64,6 +64,18 @@ wsi_videoout_window_sized(uint32_t width, uint32_t height)
+    return width >= 320 && height >= 200;
+ }
+ 
++/* Drawn across the framebuffer when Aspect is Stretch (PW_PC5_STRETCH=1).
++ * A helper under 320x200 is not: Project IGI, Warcraft III and Blade & Sword
++ * open a 111x1 swapchain, Max Payne 3 a 113x2, and wined3d probes with 10x10.
++ * With stretch on, Project IGI's 111x1 was drawn over the whole 1920x1080.
++ * Taking the display is unchanged: a helper is still refused once an owner
++ * has presented, and still free when nothing has. */
++static inline bool
++wsi_videoout_across_framebuffer(uint32_t width, uint32_t height)
++{
++   return wsi_videoout_window_sized(width, height);
++}
++
+ /* owner: what has the display, or NULL; replaces: the new one is its oldSwapchain's; now_ns: the time. */
+ static inline enum wsi_videoout_takeover
+ wsi_videoout_takeover(const struct wsi_videoout_window *owner, bool replaces, const struct wsi_videoout_window *chain,
+-- 
+2.39.5
+

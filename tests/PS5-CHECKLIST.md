@@ -565,6 +565,12 @@ controller's speaker.
 | 323 | Marvel's Spider-Man Remastered with Controller DualSense and no USB keyboard: its launch window (Play, Settings, Quit) | the D-pad moves between them and ✕ picks Play; in the game the D-pad and ✕ do only what the controller does | (Wine patch 0979) |
 | 324 | Marvel's Spider-Man Remastered past Play | its picture after the black of its first frames, not a black screen for good | no `radv/ps5: a submission holds more words between two splits`, no `Failed to submit queue(s), vr -4` |
 
+## Project IGI (log of 2026-11-02)
+
+| # | Do | Expect | Log |
+|---|---|---|---|
+| 325 | Project IGI with Aspect ratio Stretch (or any game that opens a 111x1 swapchain before its picture) | the game's picture, not a flash of one line stretched over the screen | `wsi/videoout: a 111x1 helper swapchain is left at its own size, not across 1920x1080 framebuffers`; the game's own size still `presents stretched` |
+
 ## Custom media navigation changes (pending on PS5)
 
 - Triangle > Appearance > Library music contains Choose music file and Remove

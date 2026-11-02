@@ -2,7 +2,8 @@
 /* Which window's picture has the console's display (patches/radv 0003, 0005 and 0007,
  * wsi_common_videoout_takeover.h), with the swapchains the games' own logs showed. A
  * game fixed by these rules stays here, so a change to them that would break it
- * again fails this test before it reaches a release. */
+ * again fails this test before it reaches a release. 0009: a helper's picture is not
+ * drawn across the framebuffer (wsi_videoout_across_framebuffer). */
 #include "wsi_common_videoout_takeover.h"
 
 #include <stdio.h>
@@ -92,6 +93,18 @@ int main(void)
     CHECK(take(window(1, 320, 200, 1, 1000), window(2, 10, 10, 0, 0), 9000) == WSI_VIDEOOUT_REFUSED, "a 10x10 probe");
     CHECK(wsi_videoout_window_sized(320, 200) && !wsi_videoout_window_sized(319, 200) && !wsi_videoout_window_sized(320, 199),
           "a window's picture is 320x200 or more");
+
+    /* 0009: with Aspect Stretch, only a window's picture is drawn across the framebuffer.
+     * Project IGI's 111x1 (and Warcraft III's, Blade & Sword's), Max Payne 3's 113x2 and
+     * wined3d's 10x10 stay their own size. Taking the display is unchanged, above. */
+    CHECK(wsi_videoout_across_framebuffer(1920, 1080), "a fullscreen picture");
+    CHECK(wsi_videoout_across_framebuffer(640, 480), "Project IGI's 640x480");
+    CHECK(wsi_videoout_across_framebuffer(320, 200), "the smallest window's picture");
+    CHECK(!wsi_videoout_across_framebuffer(111, 1), "Project IGI's 111x1 strip");
+    CHECK(!wsi_videoout_across_framebuffer(113, 2), "Max Payne 3's 113x2 strip");
+    CHECK(!wsi_videoout_across_framebuffer(10, 10), "wined3d's 10x10 probe");
+    CHECK(!wsi_videoout_across_framebuffer(319, 200) && !wsi_videoout_across_framebuffer(320, 199),
+          "under 320x200 is not drawn across");
 
     if (failures) return 1;
     puts("test_videoout: ok");
