@@ -112,7 +112,7 @@ new file mode 100644
 index 0000000..d2508eb
 --- /dev/null
 +++ b/wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,88 @@
 +From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 +From: youss17x <a.fzc17@gmail.com>
 +Date: Sun, 8 Nov 2026 09:00:00 +0100
