@@ -304,7 +304,8 @@ static int emulator_marker_in(const char *dir)
 {
     static const char *const markers[] = { "steam_emu.ini", "OnlineFix.ini", "OnlineFix64.dll", "OnlineFix.dll",
                                            "ColdClientLoader.ini", "SmartSteamEmu.ini", "SmartSteamEmu", "steam_api64_o.dll",
-                                           "steam_api_o.dll", "cream_api.ini", "ALI213.ini", "valve.ini", "CPY.ini" };
+                                           "steam_api_o.dll", "cream_api.ini", "ALI213.ini", "valve.ini", "CPY.ini",
+                                           "voices38.v38", "voices38.dll", "steam_api64.v38", "steam_api.v38", "dstorage.v38" };
     char path[PC5_PATH];
     for (size_t i = 0; i < sizeof(markers) / sizeof(markers[0]); i++)
         if (!pc5_join(path, sizeof(path), dir, markers[i]) && pc5_exists(path)) return 1;
@@ -423,8 +424,23 @@ int pc5_steam_prepare(const char *root, const char *id, const char *game_dir, co
      * gave such a game another user and other settings, and its saves were lost to it). Unless
      * its program has PC5's beside it (add_missing): another one elsewhere isn't what it loads. */
     if (on && !added_beside(program) && own_emulator(game_dir, found, count)) {
+        for (int i = 0; i < count && !status; i++) {
+            char dll[PC5_PATH], valve[PC5_PATH];
+            const char *name = strrchr(found[i], '/');
+            name = name ? name + 1 : found[i];
+            if (pc5_join(dll, sizeof(dll), game_dir, found[i]) || pc5_format(valve, sizeof(valve), "%s.pc5-valve", dll))
+                continue;
+            if (!pc5_pe_signed_by(dll, "Valve") && pc5_is_file(valve)) {
+                if (rename(valve, dll)) {
+                    snprintf(error, size, "PC5 can't put Steam's %s back.", name);
+                    status = -1;
+                } else {
+                    changed++;
+                }
+            }
+        }
         pc5_free(found);
-        return 0;
+        return status ? -1 : changed;
     }
     char note[PC5_PATH];
     uint32_t known = on && count ? known_app_id(root, id, game_dir, NULL, 0) : 0;
@@ -512,7 +528,8 @@ enum { CHECK_DEPTH = 4, CHECK_ENTRIES = 20000, CHECK_SHOWN = 8 };
 static const char *const stand_in_files[] = {
     "steam_emu.ini", "OnlineFix.ini", "OnlineFix64.dll", "OnlineFix.dll", "ColdClientLoader.ini", "coldloader.dll",
     "SmartSteamEmu.ini", "steam_api64_o.dll", "steam_api_o.dll", "cream_api.ini", "ALI213.ini", "valve.ini", "CPY.ini",
-    "CODEX.ini", "steamclient.dll", "steamclient64.dll",
+    "CODEX.ini", "steamclient.dll", "steamclient64.dll", "voices38.v38", "voices38.dll", "steam_api64.v38", "steam_api.v38",
+    "dstorage.v38",
 };
 
 typedef struct CheckWalk {
