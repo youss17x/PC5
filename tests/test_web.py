@@ -249,7 +249,7 @@ def main():
         with socket.create_connection(("127.0.0.1", server.port), timeout=10) as s:
             s.sendall(b"PUT /upload/Cut/short.bin HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\n" + b"x" * 1000)
         for _ in range(50):
-            if server.counts()["transfers"] == "0":
+            if server.counts()["transfers"] == "0" and not os.path.exists(os.path.join(install, "Cut", "short.bin.pc5part")):
                 break
             time.sleep(0.1)
         assert not os.path.exists(os.path.join(install, "Cut", "short.bin"))
