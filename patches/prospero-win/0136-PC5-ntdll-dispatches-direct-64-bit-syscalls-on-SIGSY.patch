@@ -1,17 +1,19 @@
-From 46b203c0776da2d9b30694eea3ae563d5008097c Mon Sep 17 00:00:00 2001
+From d787a08ce0ff0b38ec2fbaaf7121a0c46e3b3364 Mon Sep 17 00:00:00 2001
 From: youss17x <a.fzc17@gmail.com>
-Date: Sun, 8 Nov 2026 18:21:13 +0100
-Subject: [PATCH] PC5: ntdll translates direct syscalls to int 0x2e, dispatches
- them on int 0x2e/SIGSYS, and reads back debug registers
+Date: Sun, 8 Nov 2026 22:31:14 +0100
+Subject: [PATCH] PC5: ntdll translates direct syscalls to int 0x2e, reads
+ debug registers, and allows SEH unwinding on pivoted frames
 
 ---
  ...tch-direct-64-bit-syscalls-on-sigsys.patch |  99 ++++++++++++++
  ...-a-thread-reads-back-debug-registers.patch | 121 ++++++++++++++++++
  ...ranslate-direct-syscalls-to-int-0x2e.patch | 108 ++++++++++++++++
- 3 files changed, 328 insertions(+)
+ ...-seh-frames-outside-teb-stack-bounds.patch |  80 ++++++++++++
+ 4 files changed, 408 insertions(+)
  create mode 100644 wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
  create mode 100644 wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
  create mode 100644 wine/patches/1007-ntdll-ps5-translate-direct-syscalls-to-int-0x2e.patch
+ create mode 100644 wine/patches/1008-ntdll-ps5-allow-seh-frames-outside-teb-stack-bounds.patch
 
 diff --git a/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch b/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
 new file mode 100644
@@ -356,6 +358,92 @@ index 0000000..65ade1b
 +     return mprotect( base, size, unix_prot );
 + }
 + 
++-- 
++2.43.0
++
+diff --git a/wine/patches/1008-ntdll-ps5-allow-seh-frames-outside-teb-stack-bounds.patch b/wine/patches/1008-ntdll-ps5-allow-seh-frames-outside-teb-stack-bounds.patch
+new file mode 100644
+index 0000000..980b7d1
+--- /dev/null
++++ b/wine/patches/1008-ntdll-ps5-allow-seh-frames-outside-teb-stack-bounds.patch
+@@ -0,0 +1,80 @@
++From 856eee3d3f02b8056ce2b6caeaec5035f529ac86 Mon Sep 17 00:00:00 2001
++From: youss17x <a.fzc17@gmail.com>
++Date: Sun, 8 Nov 2026 22:30:51 +0100
++Subject: [PATCH] ntdll: Allow 64-bit SEH unwinding on frames outside TEB stack
++ limits.
++
++---
++ dlls/ntdll/ntdll_misc.h    | 12 ++++++++++++
++ dlls/ntdll/signal_x86_64.c | 18 ++++++++++++++++--
++ 2 files changed, 28 insertions(+), 2 deletions(-)
++
++diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
++index 2bf3cfa..6dfb207 100644
++--- a/dlls/ntdll/ntdll_misc.h
+++++ b/dlls/ntdll/ntdll_misc.h
++@@ -68,6 +68,18 @@ static inline BOOL is_valid_frame( ULONG_PTR frame )
++             (void *)frame <= NtCurrentTeb()->Tib.StackBase);
++ }
++ 
+++static inline BOOL is_valid_establisher_frame( ULONG_PTR frame )
+++{
+++    if (frame & (sizeof(void*) - 1)) return FALSE;
+++    if ((void *)frame >= NtCurrentTeb()->Tib.StackLimit &&
+++        (void *)frame <= NtCurrentTeb()->Tib.StackBase) return TRUE;
+++#ifdef __x86_64__
+++    return (frame >= 0x10000 && frame < (ULONG_PTR)0x7fffffffffffULL);
+++#else
+++    return FALSE;
+++#endif
+++}
+++
++ extern void WINAPI LdrInitializeThunk(CONTEXT*,ULONG_PTR,ULONG_PTR,ULONG_PTR);
++ extern void WINAPI KiUserExceptionDispatcher(EXCEPTION_RECORD*,CONTEXT*);
++ extern void WINAPI KiUserApcDispatcher(CONTEXT*,ULONG_PTR,ULONG_PTR,ULONG_PTR,PNTAPCFUNC);
++diff --git a/dlls/ntdll/signal_x86_64.c b/dlls/ntdll/signal_x86_64.c
++index b94e4a2..0f13268 100644
++--- a/dlls/ntdll/signal_x86_64.c
+++++ b/dlls/ntdll/signal_x86_64.c
++@@ -256,7 +256,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
++     unwind_done:
++         if (!dispatch.EstablisherFrame) break;
++ 
++-        if (!is_valid_frame( dispatch.EstablisherFrame ))
+++        if (!is_valid_establisher_frame( dispatch.EstablisherFrame ))
++         {
++             ERR( "invalid frame %p (%p-%p)\n", (void *)dispatch.EstablisherFrame,
++                  NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase );
++@@ -264,6 +264,20 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
++             break;
++         }
++ 
+++#ifdef __PROSPERO__
+++        if (dispatch.EstablisherFrame &&
+++            ((void *)dispatch.EstablisherFrame < NtCurrentTeb()->Tib.StackLimit ||
+++             (void *)dispatch.EstablisherFrame > NtCurrentTeb()->Tib.StackBase))
+++        {
+++            static LONG logged_pivoted_frame;
+++            if (InterlockedIncrement( &logged_pivoted_frame ) <= 10)
+++                MESSAGE( "wine-ps5: dispatching SEH on pivoted frame %p (stack %p-%p) handler %p\n",
+++                         (void *)dispatch.EstablisherFrame,
+++                         NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase,
+++                         dispatch.LanguageHandler );
+++        }
+++#endif
+++
++         if (dispatch.LanguageHandler)
++         {
++             TRACE( "calling handler %p (rec=%p, frame=%I64x context=%p, dispatch=%p)\n",
++@@ -732,7 +746,7 @@ void WINAPI RtlUnwindEx( PVOID end_frame, PVOID target_ip, EXCEPTION_RECORD *rec
++     unwind_done:
++         if (!dispatch.EstablisherFrame) break;
++ 
++-        if (!is_valid_frame( dispatch.EstablisherFrame ))
+++        if (!is_valid_establisher_frame( dispatch.EstablisherFrame ))
++         {
++             ERR( "invalid frame %p (%p-%p)\n", (void *)dispatch.EstablisherFrame,
++                  NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase );
 +-- 
 +2.43.0
 +
