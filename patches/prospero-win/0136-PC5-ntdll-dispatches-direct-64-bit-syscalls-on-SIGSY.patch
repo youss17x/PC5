@@ -6,8 +6,8 @@ Subject: [PATCH] PC5: ntdll dispatches direct 64-bit syscalls on SIGSYS, reads
 
 ---
  ...tch-direct-64-bit-syscalls-on-sigsys.patch | 91 +++++++++++++++++++
- ...-a-thread-reads-back-debug-registers.patch | 88 ++++++++++++++++++
- 2 files changed, 179 insertions(+)
+ ...-a-thread-reads-back-debug-registers.patch | 94 +++++++++++++++++++
+ 2 files changed, 185 insertions(+)
  create mode 100644 wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
  create mode 100644 wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
 
@@ -113,15 +113,15 @@ new file mode 100644
 index 0000000..f80c5cd
 --- /dev/null
 +++ b/wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,94 @@
 +From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 +From: youss17x <a.fzc17@gmail.com>
 +Date: Sun, 8 Nov 2026 09:00:00 +0100
 +Subject: [PATCH] ntdll: ps5: a thread reads back debug registers and handles int 0x2e.
 +
 +---
-+ dlls/ntdll/unix/signal_x86_64.c | 65 ++++++++++++++++++++++++++++++++++++++++-
-+ 1 file changed, 64 insertions(+), 1 deletion(-)
++ dlls/ntdll/unix/signal_x86_64.c | 69 ++++++++++++++++++++++++++++++++++++++++-
++ 1 file changed, 68 insertions(+), 1 deletion(-)
 +
 +--- a/dlls/ntdll/unix/signal_x86_64.c
 ++++ b/dlls/ntdll/unix/signal_x86_64.c
@@ -173,7 +173,7 @@ index 0000000..f80c5cd
 +     /* debug registers require a server call */
 +     if (needed_flags & CONTEXT_I386_DEBUG_REGISTERS) self = FALSE;
 + 
-+@@ -2200,6 +2232,28 @@
++@@ -2200,6 +2232,31 @@
 + 
 +     switch (ERROR_sig(sigcontext) >> 3)
 +     {
@@ -188,9 +188,12 @@ index 0000000..f80c5cd
 ++
 ++            if (syscall_frame)
 ++            {
+++                syscall_frame->rip = next_rip + 0xb;
 ++                syscall_frame->rcx = next_rip;
 ++                syscall_frame->r11 = EFL_sig(sigcontext);
-++                syscall_frame->restore_flags |= CONTEXT_CONTROL;
+++                syscall_frame->restore_flags = CONTEXT_CONTROL;
+++                RCX_sig(sigcontext) = (ULONG_PTR)syscall_frame;
+++                R11_sig(sigcontext) = syscall_frame->r11;
 ++            }
 ++            RIP_sig(sigcontext) = (ULONG64)__wine_syscall_dispatcher_prolog_end_ptr;
 ++            pw_set_host_fs( data, sigcontext );
@@ -202,6 +205,9 @@ index 0000000..f80c5cd
 +     case 0x29:
 +         /* __fastfail: process state is corrupted */
 +         rec->ExceptionCode = STATUS_STACK_BUFFER_OVERRUN;
++-- 
++2.43.0
++
 -- 
 2.43.0
 
