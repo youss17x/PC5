@@ -1,33 +1,33 @@
-From dfba62fa8b93299af1f60f355dfc40a67f2d4156 Mon Sep 17 00:00:00 2001
+From a803bd7e4a2ba6f4a60813fcb1a522e4f5aee11a Mon Sep 17 00:00:00 2001
 From: youss17x <a.fzc17@gmail.com>
-Date: Sun, 8 Nov 2026 09:00:00 +0100
+Date: Sun, 8 Nov 2026 17:58:15 +0100
 Subject: [PATCH] PC5: ntdll dispatches direct 64-bit syscalls on SIGSYS, reads
  back debug registers and handles int 0x2e
 
 ---
- ...tch-direct-64-bit-syscalls-on-sigsys.patch | 91 +++++++++++++++++++
- ...-a-thread-reads-back-debug-registers.patch | 94 +++++++++++++++++++
- 2 files changed, 185 insertions(+)
+ ...tch-direct-64-bit-syscalls-on-sigsys.patch | 102 +++++++++++++++
+ ...-a-thread-reads-back-debug-registers.patch | 121 ++++++++++++++++++
+ 2 files changed, 223 insertions(+)
  create mode 100644 wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
  create mode 100644 wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
 
 diff --git a/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch b/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
 new file mode 100644
-index 0000000..6b888ca
+index 0000000..b924c12
 --- /dev/null
 +++ b/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
-@@ -0,0 +1,91 @@
-+From efb158a376a1d91db643a61347988d95fc3e5ab5 Mon Sep 17 00:00:00 2001
+@@ -0,0 +1,102 @@
++From a7082ae8b6d5d40ce03f10e3e868297adca4ec6f Mon Sep 17 00:00:00 2001
 +From: youss17x <a.fzc17@gmail.com>
-+Date: Sun, 8 Nov 2026 06:12:04 +0100
++Date: Sun, 8 Nov 2026 17:58:03 +0100
 +Subject: [PATCH] ntdll: Dispatch direct 64-bit syscalls on SIGSYS on PS5.
 +
 +---
-+ dlls/ntdll/unix/signal_x86_64.c | 34 ++++++++++++++++++++++++++++++---
-+ 1 file changed, 31 insertions(+), 3 deletions(-)
++ dlls/ntdll/unix/signal_x86_64.c | 45 ++++++++++++++++++++++++++++++---
++ 1 file changed, 41 insertions(+), 4 deletions(-)
 +
 +diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
-+index 8592cb4..f6fd532 100644
++index 8592cb4..9106495 100644
 +--- a/dlls/ntdll/unix/signal_x86_64.c
 ++++ b/dlls/ntdll/unix/signal_x86_64.c
 +@@ -957,6 +957,7 @@ PW_NATIVE_SIGNAL_ENTRY( quit )
@@ -56,34 +56,45 @@ index 0000000..6b888ca
 + static void sigsys_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
 + {
 +     extern const void *__wine_syscall_dispatcher_prolog_end_ptr;
-+@@ -3457,6 +3461,26 @@ static void sigsys_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
++@@ -3457,7 +3461,36 @@ static void sigsys_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
 +     struct thread_data *data = init_handler( sigcontext );
 +     struct syscall_frame *frame = get_syscall_frame( data );
 + 
++-    TRACE_(seh)("SIGSYS, rax %#lx, rip %#lx.\n", (long)RAX_sig(sigcontext), (long)RIP_sig(sigcontext));
 ++#ifdef __PROSPERO__
-++    if (RAX_sig(sigcontext) == 78 /* ENOSYS */ && RIP_sig(sigcontext) >= 18)
+++    if (RAX_sig(sigcontext) == 78 /* ENOSYS */ && RIP_sig(sigcontext) >= 24)
 ++    {
 ++        const BYTE *rip = (const BYTE *)(ULONG_PTR)RIP_sig(sigcontext);
 ++        if (*(const WORD *)(rip - 2) == 0x050f)
 ++        {
-++            if (rip[-7] == 0xb8)
+++            int offset;
+++            for (offset = 7; offset <= 24; offset++)
 ++            {
-++                RAX_sig(sigcontext) = *(const DWORD *)(rip - 6);
-++                EFL_sig(sigcontext) &= ~1;
-++            }
-++            else if (rip[-18] == 0xb8)
-++            {
-++                RAX_sig(sigcontext) = *(const DWORD *)(rip - 17);
-++                EFL_sig(sigcontext) &= ~1;
+++                if (rip[-offset] == 0xb8)
+++                {
+++                    DWORD id = *(const DWORD *)(rip - offset + 1);
+++                    if (id < 0x3000)
+++                    {
+++                        RAX_sig(sigcontext) = id;
+++                        EFL_sig(sigcontext) &= ~1;
+++                        break;
+++                    }
+++                }
 ++            }
 ++        }
 ++    }
+++    static LONG logged_sys;
+++    if (InterlockedIncrement( &logged_sys ) <= 10)
+++        MESSAGE( "wine-ps5: sigsys syscall id=0x%lx rip=%p\n",
+++                 (long)RAX_sig(sigcontext), (void *)RIP_sig(sigcontext) );
 ++#endif
 ++
-+     TRACE_(seh)("SIGSYS, rax %#lx, rip %#lx.\n", (long)RAX_sig(sigcontext), (long)RIP_sig(sigcontext));
+++    TRACE_(seh)("SIGSYS, rax %#lx, rip %#lx.
+++", (long)RAX_sig(sigcontext), (long)RIP_sig(sigcontext));
 + 
 + #ifdef __linux__
-+@@ -3481,6 +3505,10 @@ static void sigsys_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
++     if (!syscall_dispatch_enabled)
++@@ -3481,6 +3514,10 @@ static void sigsys_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
 +         frame->restore_flags |= CONTEXT_CONTROL;
 +     }
 +     RIP_sig(sigcontext) = (ULONG64)__wine_syscall_dispatcher_prolog_end_ptr;
@@ -94,7 +105,7 @@ index 0000000..6b888ca
 + }
 + #endif
 + 
-+@@ -3713,8 +3741,8 @@ void signal_init_process( TEB *teb )
++@@ -3713,8 +3750,8 @@ void signal_init_process( TEB *teb )
 +     if (pw_native_sigaction( SIGSEGV, &sig_act, NULL ) == -1) goto error;
 +     if (pw_native_sigaction( SIGILL, &sig_act, NULL ) == -1) goto error;
 +     if (pw_native_sigaction( SIGBUS, &sig_act, NULL ) == -1) goto error;
@@ -110,22 +121,25 @@ index 0000000..6b888ca
 +
 diff --git a/wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch b/wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
 new file mode 100644
-index 0000000..f80c5cd
+index 0000000..dd5182e
 --- /dev/null
 +++ b/wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
-@@ -0,0 +1,94 @@
-+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+@@ -0,0 +1,121 @@
++From da3a6714b8c712d2a394114534b1948b14b9e880 Mon Sep 17 00:00:00 2001
 +From: youss17x <a.fzc17@gmail.com>
-+Date: Sun, 8 Nov 2026 09:00:00 +0100
-+Subject: [PATCH] ntdll: ps5: a thread reads back debug registers and handles int 0x2e.
++Date: Sun, 8 Nov 2026 17:58:03 +0100
++Subject: [PATCH] ntdll: ps5: a thread reads back debug registers and handles
++ int 0x2e.
 +
 +---
-+ dlls/ntdll/unix/signal_x86_64.c | 69 ++++++++++++++++++++++++++++++++++++++++-
-+ 1 file changed, 68 insertions(+), 1 deletion(-)
++ dlls/ntdll/unix/signal_x86_64.c | 74 +++++++++++++++++++++++++++++++++
++ 1 file changed, 74 insertions(+)
 +
++diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
++index 9106495..a0529ae 100644
 +--- a/dlls/ntdll/unix/signal_x86_64.c
 ++++ b/dlls/ntdll/unix/signal_x86_64.c
-+@@ -1412,8 +1412,25 @@
++@@ -1412,8 +1412,25 @@ NTSTATUS WINAPI NtGetContextThread( HANDLE handle, CONTEXT *context )
 + 
 +     if (self && !frame) return STATUS_ACCESS_DENIED;
 + 
@@ -151,7 +165,7 @@ index 0000000..f80c5cd
 + 
 +     if (!self)
 +     {
-+@@ -1663,6 +1680,21 @@
++@@ -1663,6 +1680,21 @@ NTSTATUS get_thread_wow64_context( HANDLE handle, void *ctx, ULONG size )
 + 
 +     needed_flags = context->ContextFlags & ~CONTEXT_i386;
 + 
@@ -173,7 +187,7 @@ index 0000000..f80c5cd
 +     /* debug registers require a server call */
 +     if (needed_flags & CONTEXT_I386_DEBUG_REGISTERS) self = FALSE;
 + 
-+@@ -2200,6 +2232,31 @@
++@@ -2200,6 +2232,41 @@ static inline BOOL handle_interrupt( struct thread_data *data, ucontext_t *sigco
 + 
 +     switch (ERROR_sig(sigcontext) >> 3)
 +     {
@@ -190,11 +204,21 @@ index 0000000..f80c5cd
 ++            {
 ++                syscall_frame->rip = next_rip + 0xb;
 ++                syscall_frame->rcx = next_rip;
-++                syscall_frame->r11 = EFL_sig(sigcontext);
-++                syscall_frame->restore_flags = CONTEXT_CONTROL;
+++                syscall_frame->eflags = EFL_sig(sigcontext);
+++                syscall_frame->restore_flags = 0;
+++                if (instrumentation_callback) syscall_frame->restore_flags |= RESTORE_FLAGS_INSTRUMENTATION;
+++                if (EFL_sig(sigcontext) & 0x100)
+++                {
+++                    EFL_sig(sigcontext) &= ~0x100;
+++                    syscall_frame->restore_flags |= CONTEXT_CONTROL;
+++                }
 ++                RCX_sig(sigcontext) = (ULONG_PTR)syscall_frame;
-++                R11_sig(sigcontext) = syscall_frame->r11;
+++                R11_sig(sigcontext) = syscall_frame->eflags;
 ++            }
+++            static LONG logged_2e;
+++            if (InterlockedIncrement( &logged_2e ) <= 10)
+++                MESSAGE( "wine-ps5: int 0x2e syscall id=0x%lx rip=%p -> next=%p\n",
+++                         (long)RAX_sig(sigcontext), (void *)RIP_sig(sigcontext), (void *)next_rip );
 ++            RIP_sig(sigcontext) = (ULONG64)__wine_syscall_dispatcher_prolog_end_ptr;
 ++            pw_set_host_fs( data, sigcontext );
 ++            leave_handler( data, sigcontext );
@@ -205,6 +229,20 @@ index 0000000..f80c5cd
 +     case 0x29:
 +         /* __fastfail: process state is corrupted */
 +         rec->ExceptionCode = STATUS_STACK_BUFFER_OVERRUN;
++@@ -3184,6 +3251,13 @@ static void __attribute__((used)) segv_handler( int signal, siginfo_t *siginfo,
++     }
++ #endif
++     if (handle_syscall_fault( data, sigcontext, &rec, &context.c )) return;
+++#ifdef __PROSPERO__
+++    static LONG logged_exc;
+++    if (InterlockedIncrement( &logged_exc ) <= 10)
+++        MESSAGE( "wine-ps5: exception 0x%lx at %p (trap %ld err 0x%lx)\n",
+++                 (long)rec.ExceptionCode, (void *)RIP_sig(sigcontext),
+++                 (long)TRAP_sig(sigcontext), (long)ERROR_sig(sigcontext) );
+++#endif
++     setup_raise_exception( data, sigcontext, &rec, &context );
++ }
++ 
 +-- 
 +2.43.0
 +
