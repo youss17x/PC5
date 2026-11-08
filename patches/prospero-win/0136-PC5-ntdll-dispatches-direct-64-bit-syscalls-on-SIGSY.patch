@@ -1,12 +1,14 @@
 From 89ad53c343df1d075413fae0830674453d156a88 Mon Sep 17 00:00:00 2001
 From: youss17x <a.fzc17@gmail.com>
-Date: Sun, 8 Nov 2026 06:12:27 +0100
-Subject: [PATCH] PC5: ntdll dispatches direct 64-bit syscalls on SIGSYS
+Date: Sun, 8 Nov 2026 09:00:00 +0100
+Subject: [PATCH] PC5: ntdll dispatches direct 64-bit syscalls on SIGSYS, reads back debug registers and handles int 0x2e
 
 ---
- ...tch-direct-64-bit-syscalls-on-sigsys.patch | 91 +++++++++++++++++++
- 1 file changed, 91 insertions(+)
+ ...tch-direct-64-bit-syscalls-on-sigsys.patch |  91 +++++++++++++++++++
+ ...5-a-thread-reads-back-debug-registers.patch |  75 ++++++++++++++++
+ 2 files changed, 166 insertions(+)
  create mode 100644 wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
+ create mode 100644 wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
 
 diff --git a/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch b/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
 new file mode 100644
@@ -105,6 +107,99 @@ index 0000000..cfa8514
 +-- 
 +2.43.0
 +
+diff --git a/wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch b/wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
+new file mode 100644
+index 0000000..d2508eb
+--- /dev/null
++++ b/wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
+@@ -0,0 +1,75 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: youss17x <a.fzc17@gmail.com>
++Date: Sun, 8 Nov 2026 09:00:00 +0100
++Subject: [PATCH] ntdll: ps5: a thread reads back debug registers and handles int 0x2e.
++
++---
++ dlls/ntdll/unix/signal_x86_64.c | 65 ++++++++++++++++++++++++++++++++++++++++-
++ 1 file changed, 64 insertions(+), 1 deletion(-)
++
++--- a/dlls/ntdll/unix/signal_x86_64.c
+++++ b/dlls/ntdll/unix/signal_x86_64.c
++@@ -1412,8 +1412,25 @@
++ 
++     if (self && !frame) return STATUS_ACCESS_DENIED;
++ 
+++#ifdef __PROSPERO__
+++    /* The console has no debug registers a process can reach (no ptrace): the server cannot read them and
+++     * answered without them, so the caller's buffer came back as it was (uninitialized stack garbage), which
+++     * anti-debugging code reads as a debugger's breakpoints. A thread's own are the ones it set last. */
+++    if (self && (needed_flags & CONTEXT_DEBUG_REGISTERS))
+++    {
+++        context->Dr0 = amd64_data->dr0;
+++        context->Dr1 = amd64_data->dr1;
+++        context->Dr2 = amd64_data->dr2;
+++        context->Dr3 = amd64_data->dr3;
+++        context->Dr6 = amd64_data->dr6;
+++        context->Dr7 = amd64_data->dr7;
+++        context->ContextFlags |= CONTEXT_DEBUG_REGISTERS;
+++        needed_flags &= ~CONTEXT_DEBUG_REGISTERS;
+++    }
+++#else
++     /* debug registers require a server call */
++     if (needed_flags & CONTEXT_DEBUG_REGISTERS) self = FALSE;
+++#endif
++ 
++     if (!self)
++     {
++@@ -1663,6 +1680,21 @@
++ 
++     needed_flags = context->ContextFlags & ~CONTEXT_i386;
++ 
+++#ifdef __PROSPERO__
+++    /* As for a 64-bit thread (NtGetContextThread): the server cannot read debug registers here, and the values it
+++     * did not give back also replaced the ones kept below. */
+++    if (self && (needed_flags & CONTEXT_I386_DEBUG_REGISTERS))
+++    {
+++        context->Dr0 = amd64_data->dr0;
+++        context->Dr1 = amd64_data->dr1;
+++        context->Dr2 = amd64_data->dr2;
+++        context->Dr3 = amd64_data->dr3;
+++        context->Dr6 = amd64_data->dr6;
+++        context->Dr7 = amd64_data->dr7;
+++        context->ContextFlags |= CONTEXT_I386_DEBUG_REGISTERS;
+++        needed_flags &= ~CONTEXT_I386_DEBUG_REGISTERS;
+++    }
+++#endif
++     /* debug registers require a server call */
++     if (needed_flags & CONTEXT_I386_DEBUG_REGISTERS) self = FALSE;
++ 
++@@ -2200,6 +2232,28 @@
++ 
++     switch (ERROR_sig(sigcontext) >> 3)
++     {
+++    case 0x2e:
+++#ifdef __PROSPERO__
+++        /* Direct 64-bit system call via int 0x2e (Windows interrupt syscall) on PS5. */
+++        if (CS_sig(sigcontext) == cs64_sel)
+++        {
+++            extern const void *__wine_syscall_dispatcher_prolog_end_ptr;
+++            struct syscall_frame *syscall_frame = get_syscall_frame( data );
+++            ULONG64 next_rip = RIP_sig(sigcontext) + 2;
+++
+++            if (syscall_frame)
+++            {
+++                syscall_frame->rcx = next_rip;
+++                syscall_frame->r11 = EFL_sig(sigcontext);
+++                syscall_frame->restore_flags |= CONTEXT_CONTROL;
+++            }
+++            RIP_sig(sigcontext) = (ULONG64)__wine_syscall_dispatcher_prolog_end_ptr;
+++            pw_set_host_fs( data, sigcontext );
+++            leave_handler( data, sigcontext );
+++            return TRUE;
+++        }
+++#endif
+++        break;
++     case 0x29:
++         /* __fastfail: process state is corrupted */
++         rec->ExceptionCode = STATUS_STACK_BUFFER_OVERRUN;
 -- 
 2.43.0
-
