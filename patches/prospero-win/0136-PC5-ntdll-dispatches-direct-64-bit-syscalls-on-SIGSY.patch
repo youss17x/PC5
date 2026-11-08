@@ -249,25 +249,25 @@ index 0000000..376897c
 +
 diff --git a/wine/patches/1007-ntdll-ps5-translate-direct-syscalls-to-int-0x2e.patch b/wine/patches/1007-ntdll-ps5-translate-direct-syscalls-to-int-0x2e.patch
 new file mode 100644
-index 0000000..65ade1b
+index 0000000..fe2d44d
 --- /dev/null
 +++ b/wine/patches/1007-ntdll-ps5-translate-direct-syscalls-to-int-0x2e.patch
-@@ -0,0 +1,108 @@
-+From 17a870321d069e48473ecf5880b3b815fb99242e Mon Sep 17 00:00:00 2001
+@@ -0,0 +1,121 @@
++From 6b3777cf4fb6c99a8b387e8a60ac830d8e6906cb Mon Sep 17 00:00:00 2001
 +From: youss17x <a.fzc17@gmail.com>
-+Date: Sun, 8 Nov 2026 18:20:53 +0100
-+Subject: [PATCH 3/3] ntdll: Translate direct syscall instructions to int 0x2e
-+ on PS5.
++Date: Sun, 8 Nov 2026 23:50:06 +0100
++Subject: [PATCH] ntdll: Translate direct syscall instructions to int 0x2e on
++ PS5.
 +
 +---
-+ dlls/ntdll/unix/virtual.c | 77 +++++++++++++++++++++++++++++++++++++++
-+ 1 file changed, 77 insertions(+)
++ dlls/ntdll/unix/virtual.c | 90 +++++++++++++++++++++++++++++++++++++++
++ 1 file changed, 90 insertions(+)
 +
 +diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
-+index 7d1212d..652f66c 100644
++index 7d1212d..fe2d44d 100644
 +--- a/dlls/ntdll/unix/virtual.c
 ++++ b/dlls/ntdll/unix/virtual.c
-+@@ -2358,6 +2358,74 @@ static DWORD get_win32_prot( BYTE vprot, unsigned int map_prot )
++@@ -2358,6 +2358,87 @@ static DWORD get_win32_prot( BYTE vprot, unsigned int map_prot )
 +  *
 +  * Build page protections from Win32 flags.
 +  */
@@ -280,6 +280,13 @@ index 0000000..65ade1b
 ++ * Translate direct syscall instructions (0x0f 0x05) to int 0x2e (0xcd 0x2e), which
 ++ * triggers a #GP fault that Wine's interrupt handler catches and dispatches to
 ++ * __wine_syscall_dispatcher.
+++ *
+++ * To avoid any false positives in game code or data constants, strictly verify
+++ * both preceding and following instruction boundaries:
+++ * 1. Must be preceded within 16 bytes by mov $id, %eax (0xb8 xx xx 00 00 with id < 0x2000)
+++ *    and/or mov %rcx, %r10 (0x4c 0x8b 0xd1 / 0x49 0x89 0xca).
+++ * 2. Must be immediately followed by ret (0xc3), ret imm16 (0xc2), nop (0x90),
+++ *    jmp short (0xeb), test %eax, %eax (0x85 0xc0), or add $imm8, %rsp (0x48 0x83 0xc4).
 ++ */
 ++static void pw_translate_syscalls( void *base, size_t size )
 ++{
@@ -291,35 +298,41 @@ index 0000000..65ade1b
 ++        if (p[0] == 0x0f && p[1] == 0x05)
 ++        {
 ++            BOOL is_syscall = FALSE;
+++            int k;
+++            unsigned int syscall_id = 0;
 ++
-++            /* Check next instruction: syscall is commonly followed by
-++             * ret (0xc3), ret imm16 (0xc2), nop (0x90), jmp short (0xeb), jmp near (0xe9),
-++             * test (0x85), cmp (0x3d), rex.w (0x48..0x4f), jcc (0x70..0x7f), or pop (0x58..0x5f). */
+++            /* Check following instruction: stub must return, jump or test return code */
 ++            if (p + 2 < (unsigned char *)base + size)
 ++            {
 ++                unsigned char next = p[2];
-++                if (next == 0xc3 || next == 0xc2 || next == 0x90 || next == 0xeb || next == 0xe9 ||
-++                    next == 0x85 || next == 0x3d || (next >= 0x48 && next <= 0x4f) ||
-++                    (next >= 0x70 && next <= 0x7f) || (next >= 0x58 && next <= 0x5f))
-++                    is_syscall = TRUE;
-++            }
-++
-++            /* Or check preceding instructions: mov $id, %eax (0xb8 xx xx 00 00)
-++             * or mov %rcx, %r10 (0x4c 0x8b 0xd1) within 32 bytes */
-++            if (!is_syscall)
-++            {
-++                int k;
-++                for (k = 3; k <= 32 && p - k >= (unsigned char *)base; k++)
+++                if (next == 0xc3 || next == 0xc2 || next == 0x90 || next == 0xeb ||
+++                    (next == 0x85 && p + 3 < (unsigned char *)base + size && p[3] == 0xc0) ||
+++                    (next == 0x48 && p + 4 < (unsigned char *)base + size && p[3] == 0x83 && p[4] == 0xc4))
 ++                {
-++                    if (p[-k] == 0xb8 && p - k + 4 < p && p[-k + 3] == 0 && p[-k + 4] == 0)
+++                    /* Preceding instruction must set syscall ID in %eax:
+++                     * mov $id, %eax (0xb8 xx xx 00 00) with id < 0x2000 within 16 bytes */
+++                    for (k = 5; k <= 16 && p - k >= (unsigned char *)base; k++)
 ++                    {
-++                        is_syscall = TRUE;
-++                        break;
+++                        if (p[-k] == 0xb8 && p - k + 4 < p)
+++                        {
+++                            unsigned int id = (unsigned int)p[-k + 1] | ((unsigned int)p[-k + 2] << 8);
+++                            if (p[-k + 3] == 0 && p[-k + 4] == 0 && id < 0x2000)
+++                            {
+++                                is_syscall = TRUE;
+++                                syscall_id = id;
+++                                break;
+++                            }
+++                        }
 ++                    }
-++                    if (k >= 3 && p[-k] == 0x4c && p[-k + 1] == 0x8b && p[-k + 2] == 0xd1)
+++
+++                    /* Or preceded directly by mov %rcx, %r10 */
+++                    if (!is_syscall && p - 3 >= (unsigned char *)base)
 ++                    {
-++                        is_syscall = TRUE;
-++                        break;
+++                        if ((p[-3] == 0x4c && p[-2] == 0x8b && p[-1] == 0xd1) ||
+++                            (p[-3] == 0x49 && p[-2] == 0x89 && p[-1] == 0xca))
+++                        {
+++                            is_syscall = TRUE;
+++                        }
 ++                    }
 ++                }
 ++            }
@@ -328,7 +341,7 @@ index 0000000..65ade1b
 ++            {
 ++                p[0] = 0xcd;
 ++                p[1] = 0x2e;
-++                MESSAGE( "wine-ps5: translated direct syscall at %p to int 0x2e\n", p );
+++                MESSAGE( "wine-ps5: translated direct syscall at %p to int 0x2e (id=0x%x)\n", p, syscall_id );
 ++                p += 2;
 ++                continue;
 ++            }
@@ -342,10 +355,10 @@ index 0000000..65ade1b
 + static NTSTATUS get_vprot_flags( DWORD protect, unsigned int *vprot, BOOL image )
 + {
 +     switch(protect & 0xff)
-+@@ -2415,6 +2483,15 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
++@@ -2415,6 +2496,15 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
 +         if (!(unix_prot & PROT_WRITE)) return -1;
 +     }
-+ 
++
 ++#ifdef __PROSPERO__
 ++    if ((unix_prot & PROT_EXEC) && size)
 ++    {
@@ -357,10 +370,11 @@ index 0000000..65ade1b
 ++
 +     return mprotect( base, size, unix_prot );
 + }
-+ 
++
 +-- 
 +2.43.0
 +
+
 diff --git a/wine/patches/1008-ntdll-ps5-allow-seh-frames-outside-teb-stack-bounds.patch b/wine/patches/1008-ntdll-ps5-allow-seh-frames-outside-teb-stack-bounds.patch
 new file mode 100644
 index 0000000..980b7d1
