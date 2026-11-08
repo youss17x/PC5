@@ -252,22 +252,22 @@ new file mode 100644
 index 0000000..fe2d44d
 --- /dev/null
 +++ b/wine/patches/1007-ntdll-ps5-translate-direct-syscalls-to-int-0x2e.patch
-@@ -0,0 +1,121 @@
-+From 6b3777cf4fb6c99a8b387e8a60ac830d8e6906cb Mon Sep 17 00:00:00 2001
+@@ -0,0 +1,123 @@
++From db4de90622141b703dca2a54ca3e5e53fe0b413a Mon Sep 17 00:00:00 2001
 +From: youss17x <a.fzc17@gmail.com>
 +Date: Sun, 8 Nov 2026 23:50:06 +0100
 +Subject: [PATCH] ntdll: Translate direct syscall instructions to int 0x2e on
 + PS5.
 +
 +---
-+ dlls/ntdll/unix/virtual.c | 90 +++++++++++++++++++++++++++++++++++++++
-+ 1 file changed, 90 insertions(+)
++ dlls/ntdll/unix/virtual.c | 92 +++++++++++++++++++++++++++++++++++++++
++ 1 file changed, 92 insertions(+)
 +
 +diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
-+index 7d1212d..fe2d44d 100644
++index 7d1212d..346c5cf 100644
 +--- a/dlls/ntdll/unix/virtual.c
 ++++ b/dlls/ntdll/unix/virtual.c
-+@@ -2358,6 +2358,87 @@ static DWORD get_win32_prot( BYTE vprot, unsigned int map_prot )
++@@ -2358,6 +2358,89 @@ static DWORD get_win32_prot( BYTE vprot, unsigned int map_prot )
 +  *
 +  * Build page protections from Win32 flags.
 +  */
@@ -283,10 +283,11 @@ index 0000000..fe2d44d
 ++ *
 ++ * To avoid any false positives in game code or data constants, strictly verify
 ++ * both preceding and following instruction boundaries:
-++ * 1. Must be preceded within 16 bytes by mov $id, %eax (0xb8 xx xx 00 00 with id < 0x2000)
+++ * 1. Must be preceded within 32 bytes by mov $id, %eax (0xb8 xx xx 00 00 with id < 0x2000)
 ++ *    and/or mov %rcx, %r10 (0x4c 0x8b 0xd1 / 0x49 0x89 0xca).
 ++ * 2. Must be immediately followed by ret (0xc3), ret imm16 (0xc2), nop (0x90),
-++ *    jmp short (0xeb), test %eax, %eax (0x85 0xc0), or add $imm8, %rsp (0x48 0x83 0xc4).
+++ *    jmp short (0xeb), jmp near (0xe9), test (0x85), cmp (0x3d),
+++ *    or 64-bit REX.W operations (0x48 followed by test/cmp/mov/add).
 ++ */
 ++static void pw_translate_syscalls( void *base, size_t size )
 ++{
@@ -301,17 +302,19 @@ index 0000000..fe2d44d
 ++            int k;
 ++            unsigned int syscall_id = 0;
 ++
-++            /* Check following instruction: stub must return, jump or test return code */
+++            /* Check following instruction: stub must return, jump, test, or move return code */
 ++            if (p + 2 < (unsigned char *)base + size)
 ++            {
 ++                unsigned char next = p[2];
-++                if (next == 0xc3 || next == 0xc2 || next == 0x90 || next == 0xeb ||
-++                    (next == 0x85 && p + 3 < (unsigned char *)base + size && p[3] == 0xc0) ||
-++                    (next == 0x48 && p + 4 < (unsigned char *)base + size && p[3] == 0x83 && p[4] == 0xc4))
+++                if (next == 0xc3 || next == 0xc2 || next == 0x90 || next == 0xeb || next == 0xe9 ||
+++                    next == 0x85 || next == 0x3d ||
+++                    (next == 0x48 && p + 3 < (unsigned char *)base + size &&
+++                     (p[3] == 0x85 || p[3] == 0x3d || p[3] == 0x89 || p[3] == 0x8b || p[3] == 0x83)))
 ++                {
-++                    /* Preceding instruction must set syscall ID in %eax:
-++                     * mov $id, %eax (0xb8 xx xx 00 00) with id < 0x2000 within 16 bytes */
-++                    for (k = 5; k <= 16 && p - k >= (unsigned char *)base; k++)
+++                    /* Preceding instruction within 32 bytes must set syscall ID in %eax:
+++                     * mov $id, %eax (0xb8 xx xx 00 00) with id < 0x2000,
+++                     * or set %r10 = %rcx (0x4c 0x8b 0xd1 / 0x49 0x89 0xca) */
+++                    for (k = 3; k <= 32 && p - k >= (unsigned char *)base; k++)
 ++                    {
 ++                        if (p[-k] == 0xb8 && p - k + 4 < p)
 ++                        {
@@ -323,15 +326,14 @@ index 0000000..fe2d44d
 ++                                break;
 ++                            }
 ++                        }
-++                    }
-++
-++                    /* Or preceded directly by mov %rcx, %r10 */
-++                    if (!is_syscall && p - 3 >= (unsigned char *)base)
-++                    {
-++                        if ((p[-3] == 0x4c && p[-2] == 0x8b && p[-1] == 0xd1) ||
-++                            (p[-3] == 0x49 && p[-2] == 0x89 && p[-1] == 0xca))
+++                        if ((p - k >= (unsigned char *)base) && k >= 3)
 ++                        {
-++                            is_syscall = TRUE;
+++                            if ((p[-k] == 0x4c && p[-k + 1] == 0x8b && p[-k + 2] == 0xd1) ||
+++                                (p[-k] == 0x49 && p[-k + 1] == 0x89 && p[-k + 2] == 0xca))
+++                            {
+++                                is_syscall = TRUE;
+++                                break;
+++                            }
 ++                        }
 ++                    }
 ++                }
@@ -355,7 +357,7 @@ index 0000000..fe2d44d
 + static NTSTATUS get_vprot_flags( DWORD protect, unsigned int *vprot, BOOL image )
 + {
 +     switch(protect & 0xff)
-+@@ -2415,6 +2496,15 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
++@@ -2415,6 +2498,15 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
 +         if (!(unix_prot & PROT_WRITE)) return -1;
 +     }
 +
