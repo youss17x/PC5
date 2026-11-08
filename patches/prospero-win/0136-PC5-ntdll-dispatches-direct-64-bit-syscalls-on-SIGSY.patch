@@ -1,17 +1,15 @@
-From 8f1157ce378756774b32fa9560475b126bafcfac Mon Sep 17 00:00:00 2001
+From dfba62fa8b93299af1f60f355dfc40a67f2d4156 Mon Sep 17 00:00:00 2001
 From: youss17x <a.fzc17@gmail.com>
 Date: Sun, 8 Nov 2026 09:00:00 +0100
 Subject: [PATCH] PC5: ntdll dispatches direct 64-bit syscalls on SIGSYS, reads
- back debug registers and handles int 0x2e, bcrypt handles zero IV
+ back debug registers and handles int 0x2e
 
 ---
  ...tch-direct-64-bit-syscalls-on-sigsys.patch | 91 +++++++++++++++++++
  ...-a-thread-reads-back-debug-registers.patch | 88 ++++++++++++++++++
- ...pher-without-an-iv-starts-from-zeros.patch | 33 +++++++
- 3 files changed, 212 insertions(+)
+ 2 files changed, 179 insertions(+)
  create mode 100644 wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
  create mode 100644 wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
- create mode 100644 wine/patches/1007-bcrypt-ps5-a-block-cipher-without-an-iv-starts-from-zeros.patch
 
 diff --git a/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch b/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
 new file mode 100644
@@ -204,45 +202,6 @@ index 0000000..f80c5cd
 +     case 0x29:
 +         /* __fastfail: process state is corrupted */
 +         rec->ExceptionCode = STATUS_STACK_BUFFER_OVERRUN;
-diff --git a/wine/patches/1007-bcrypt-ps5-a-block-cipher-without-an-iv-starts-from-zeros.patch b/wine/patches/1007-bcrypt-ps5-a-block-cipher-without-an-iv-starts-from-zeros.patch
-new file mode 100644
-index 0000000..e0cbb6d
---- /dev/null
-+++ b/wine/patches/1007-bcrypt-ps5-a-block-cipher-without-an-iv-starts-from-zeros.patch
-@@ -0,0 +1,33 @@
-+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-+From: youss17x <a.fzc17@gmail.com>
-+Date: Sun, 8 Nov 2026 11:00:00 +0100
-+Subject: [PATCH] bcrypt: ps5: a block cipher without an iv starts from zeros.
-+
-+---
-+ dlls/bcrypt/gnutls.c | 14 ++++++++++++++
-+ 1 file changed, 14 insertions(+)
-+
-+--- a/dlls/bcrypt/gnutls.c
-++++ b/dlls/bcrypt/gnutls.c
-+@@ -886,7 +886,21 @@
-+     vector.data = key->u.s.vector;
-+     vector.size = key->u.s.vector_len;
-+ 
-++#ifdef __PROSPERO__
-++    /* A block mode with no IV starts from zeros, as Windows does (bcrypt.c:1795); ECB, one block per call, is CBC from
-++     * zeros. The console's GnuTLS 3.8.9 gives a cipher started without an IV no IV size, and Nettle 3.10.1's
-++     * cbc_decrypt divides by it (SIGFPE in the Unix side, and the program ends); the PC's 3.8.13 does not. */
-++    if (!vector.data && (key->u.s.mode == CHAIN_MODE_CBC || key->u.s.mode == CHAIN_MODE_ECB ||
-++                         key->u.s.mode == CHAIN_MODE_CFB))
-++    {
-++        static UCHAR zero[16];
-++        vector.data = zero;
-++        vector.size = key->u.s.block_size;
-++    }
-++    if ((ret = pgnutls_cipher_init( &key_data(key)->cipher, cipher, &secret, vector.data ? &vector : NULL )))
-++#else
-+     if ((ret = pgnutls_cipher_init( &key_data(key)->cipher, cipher, &secret, key->u.s.vector ? &vector : NULL )))
-++#endif
-+     {
-+         pgnutls_perror( ret );
-+         return STATUS_INTERNAL_ERROR;
 -- 
 2.43.0
 
