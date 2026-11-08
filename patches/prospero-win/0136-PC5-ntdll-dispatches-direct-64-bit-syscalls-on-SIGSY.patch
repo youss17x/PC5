@@ -1,33 +1,35 @@
-From a803bd7e4a2ba6f4a60813fcb1a522e4f5aee11a Mon Sep 17 00:00:00 2001
+From 46b203c0776da2d9b30694eea3ae563d5008097c Mon Sep 17 00:00:00 2001
 From: youss17x <a.fzc17@gmail.com>
-Date: Sun, 8 Nov 2026 17:58:15 +0100
-Subject: [PATCH] PC5: ntdll dispatches direct 64-bit syscalls on SIGSYS, reads
- back debug registers and handles int 0x2e
+Date: Sun, 8 Nov 2026 18:21:13 +0100
+Subject: [PATCH] PC5: ntdll translates direct syscalls to int 0x2e, dispatches
+ them on int 0x2e/SIGSYS, and reads back debug registers
 
 ---
- ...tch-direct-64-bit-syscalls-on-sigsys.patch | 102 +++++++++++++++
+ ...tch-direct-64-bit-syscalls-on-sigsys.patch |  99 ++++++++++++++
  ...-a-thread-reads-back-debug-registers.patch | 121 ++++++++++++++++++
- 2 files changed, 223 insertions(+)
+ ...ranslate-direct-syscalls-to-int-0x2e.patch | 108 ++++++++++++++++
+ 3 files changed, 328 insertions(+)
  create mode 100644 wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
  create mode 100644 wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
+ create mode 100644 wine/patches/1007-ntdll-ps5-translate-direct-syscalls-to-int-0x2e.patch
 
 diff --git a/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch b/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
 new file mode 100644
-index 0000000..b924c12
+index 0000000..9488793
 --- /dev/null
 +++ b/wine/patches/1005-ntdll-ps5-dispatch-direct-64-bit-syscalls-on-sigsys.patch
-@@ -0,0 +1,102 @@
-+From a7082ae8b6d5d40ce03f10e3e868297adca4ec6f Mon Sep 17 00:00:00 2001
+@@ -0,0 +1,99 @@
++From c41ecf7ede04a91f810fa5c95291bdd841314dcf Mon Sep 17 00:00:00 2001
 +From: youss17x <a.fzc17@gmail.com>
-+Date: Sun, 8 Nov 2026 17:58:03 +0100
-+Subject: [PATCH] ntdll: Dispatch direct 64-bit syscalls on SIGSYS on PS5.
++Date: Sun, 8 Nov 2026 18:20:03 +0100
++Subject: [PATCH 1/3] ntdll: Dispatch direct 64-bit syscalls on SIGSYS on PS5.
 +
 +---
-+ dlls/ntdll/unix/signal_x86_64.c | 45 ++++++++++++++++++++++++++++++---
-+ 1 file changed, 41 insertions(+), 4 deletions(-)
++ dlls/ntdll/unix/signal_x86_64.c | 42 ++++++++++++++++++++++++++++++---
++ 1 file changed, 39 insertions(+), 3 deletions(-)
 +
 +diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
-+index 8592cb4..9106495 100644
++index 8592cb4..f582a27 100644
 +--- a/dlls/ntdll/unix/signal_x86_64.c
 ++++ b/dlls/ntdll/unix/signal_x86_64.c
 +@@ -957,6 +957,7 @@ PW_NATIVE_SIGNAL_ENTRY( quit )
@@ -56,11 +58,10 @@ index 0000000..b924c12
 + static void sigsys_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
 + {
 +     extern const void *__wine_syscall_dispatcher_prolog_end_ptr;
-+@@ -3457,7 +3461,36 @@ static void sigsys_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
++@@ -3457,6 +3461,34 @@ static void sigsys_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
 +     struct thread_data *data = init_handler( sigcontext );
 +     struct syscall_frame *frame = get_syscall_frame( data );
 + 
-+-    TRACE_(seh)("SIGSYS, rax %#lx, rip %#lx.\n", (long)RAX_sig(sigcontext), (long)RIP_sig(sigcontext));
 ++#ifdef __PROSPERO__
 ++    if (RAX_sig(sigcontext) == 78 /* ENOSYS */ && RIP_sig(sigcontext) >= 24)
 ++    {
@@ -89,12 +90,10 @@ index 0000000..b924c12
 ++                 (long)RAX_sig(sigcontext), (void *)RIP_sig(sigcontext) );
 ++#endif
 ++
-++    TRACE_(seh)("SIGSYS, rax %#lx, rip %#lx.
-++", (long)RAX_sig(sigcontext), (long)RIP_sig(sigcontext));
++     TRACE_(seh)("SIGSYS, rax %#lx, rip %#lx.\n", (long)RAX_sig(sigcontext), (long)RIP_sig(sigcontext));
 + 
 + #ifdef __linux__
-+     if (!syscall_dispatch_enabled)
-+@@ -3481,6 +3514,10 @@ static void sigsys_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
++@@ -3481,6 +3513,10 @@ static void sigsys_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
 +         frame->restore_flags |= CONTEXT_CONTROL;
 +     }
 +     RIP_sig(sigcontext) = (ULONG64)__wine_syscall_dispatcher_prolog_end_ptr;
@@ -105,7 +104,7 @@ index 0000000..b924c12
 + }
 + #endif
 + 
-+@@ -3713,8 +3750,8 @@ void signal_init_process( TEB *teb )
++@@ -3713,8 +3749,8 @@ void signal_init_process( TEB *teb )
 +     if (pw_native_sigaction( SIGSEGV, &sig_act, NULL ) == -1) goto error;
 +     if (pw_native_sigaction( SIGILL, &sig_act, NULL ) == -1) goto error;
 +     if (pw_native_sigaction( SIGBUS, &sig_act, NULL ) == -1) goto error;
@@ -121,22 +120,22 @@ index 0000000..b924c12
 +
 diff --git a/wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch b/wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
 new file mode 100644
-index 0000000..dd5182e
+index 0000000..376897c
 --- /dev/null
 +++ b/wine/patches/1006-ntdll-ps5-a-thread-reads-back-debug-registers.patch
 @@ -0,0 +1,121 @@
-+From da3a6714b8c712d2a394114534b1948b14b9e880 Mon Sep 17 00:00:00 2001
++From 556294517d599bf62dc0b488045c1e10ce0a8c6d Mon Sep 17 00:00:00 2001
 +From: youss17x <a.fzc17@gmail.com>
-+Date: Sun, 8 Nov 2026 17:58:03 +0100
-+Subject: [PATCH] ntdll: ps5: a thread reads back debug registers and handles
-+ int 0x2e.
++Date: Sun, 8 Nov 2026 18:20:25 +0100
++Subject: [PATCH 2/3] ntdll: A thread reads back debug registers it set and
++ handles direct syscalls on int 0x2e.
 +
 +---
 + dlls/ntdll/unix/signal_x86_64.c | 74 +++++++++++++++++++++++++++++++++
 + 1 file changed, 74 insertions(+)
 +
 +diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
-+index 9106495..a0529ae 100644
++index f582a27..5deb30c 100644
 +--- a/dlls/ntdll/unix/signal_x86_64.c
 ++++ b/dlls/ntdll/unix/signal_x86_64.c
 +@@ -1412,8 +1412,25 @@ NTSTATUS WINAPI NtGetContextThread( HANDLE handle, CONTEXT *context )
@@ -241,6 +240,120 @@ index 0000000..dd5182e
 ++                 (long)TRAP_sig(sigcontext), (long)ERROR_sig(sigcontext) );
 ++#endif
 +     setup_raise_exception( data, sigcontext, &rec, &context );
++ }
++ 
++-- 
++2.43.0
++
+diff --git a/wine/patches/1007-ntdll-ps5-translate-direct-syscalls-to-int-0x2e.patch b/wine/patches/1007-ntdll-ps5-translate-direct-syscalls-to-int-0x2e.patch
+new file mode 100644
+index 0000000..65ade1b
+--- /dev/null
++++ b/wine/patches/1007-ntdll-ps5-translate-direct-syscalls-to-int-0x2e.patch
+@@ -0,0 +1,108 @@
++From 17a870321d069e48473ecf5880b3b815fb99242e Mon Sep 17 00:00:00 2001
++From: youss17x <a.fzc17@gmail.com>
++Date: Sun, 8 Nov 2026 18:20:53 +0100
++Subject: [PATCH 3/3] ntdll: Translate direct syscall instructions to int 0x2e
++ on PS5.
++
++---
++ dlls/ntdll/unix/virtual.c | 77 +++++++++++++++++++++++++++++++++++++++
++ 1 file changed, 77 insertions(+)
++
++diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
++index 7d1212d..652f66c 100644
++--- a/dlls/ntdll/unix/virtual.c
+++++ b/dlls/ntdll/unix/virtual.c
++@@ -2358,6 +2358,74 @@ static DWORD get_win32_prot( BYTE vprot, unsigned int map_prot )
++  *
++  * Build page protections from Win32 flags.
++  */
+++#ifdef __PROSPERO__
+++/***********************************************************************
+++ *           pw_translate_syscalls
+++ *
+++ * On PS5, user mode execution of the syscall instruction outside libkernel
+++ * causes the kernel to immediately abort the process (SYSTEM_ILLEGAL_FUNCTION_CALL).
+++ * Translate direct syscall instructions (0x0f 0x05) to int 0x2e (0xcd 0x2e), which
+++ * triggers a #GP fault that Wine's interrupt handler catches and dispatches to
+++ * __wine_syscall_dispatcher.
+++ */
+++static void pw_translate_syscalls( void *base, size_t size )
+++{
+++    unsigned char *p = (unsigned char *)base;
+++    unsigned char *end = p + size - 2;
+++
+++    while (p <= end)
+++    {
+++        if (p[0] == 0x0f && p[1] == 0x05)
+++        {
+++            BOOL is_syscall = FALSE;
+++
+++            /* Check next instruction: syscall is commonly followed by
+++             * ret (0xc3), ret imm16 (0xc2), nop (0x90), jmp short (0xeb), jmp near (0xe9),
+++             * test (0x85), cmp (0x3d), rex.w (0x48..0x4f), jcc (0x70..0x7f), or pop (0x58..0x5f). */
+++            if (p + 2 < (unsigned char *)base + size)
+++            {
+++                unsigned char next = p[2];
+++                if (next == 0xc3 || next == 0xc2 || next == 0x90 || next == 0xeb || next == 0xe9 ||
+++                    next == 0x85 || next == 0x3d || (next >= 0x48 && next <= 0x4f) ||
+++                    (next >= 0x70 && next <= 0x7f) || (next >= 0x58 && next <= 0x5f))
+++                    is_syscall = TRUE;
+++            }
+++
+++            /* Or check preceding instructions: mov $id, %eax (0xb8 xx xx 00 00)
+++             * or mov %rcx, %r10 (0x4c 0x8b 0xd1) within 32 bytes */
+++            if (!is_syscall)
+++            {
+++                int k;
+++                for (k = 3; k <= 32 && p - k >= (unsigned char *)base; k++)
+++                {
+++                    if (p[-k] == 0xb8 && p - k + 4 < p && p[-k + 3] == 0 && p[-k + 4] == 0)
+++                    {
+++                        is_syscall = TRUE;
+++                        break;
+++                    }
+++                    if (k >= 3 && p[-k] == 0x4c && p[-k + 1] == 0x8b && p[-k + 2] == 0xd1)
+++                    {
+++                        is_syscall = TRUE;
+++                        break;
+++                    }
+++                }
+++            }
+++
+++            if (is_syscall)
+++            {
+++                p[0] = 0xcd;
+++                p[1] = 0x2e;
+++                MESSAGE( "wine-ps5: translated direct syscall at %p to int 0x2e\n", p );
+++                p += 2;
+++                continue;
+++            }
+++        }
+++        p++;
+++    }
+++}
+++#endif
+++
+++
++ static NTSTATUS get_vprot_flags( DWORD protect, unsigned int *vprot, BOOL image )
++ {
++     switch(protect & 0xff)
++@@ -2415,6 +2483,15 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
++         if (!(unix_prot & PROT_WRITE)) return -1;
++     }
++ 
+++#ifdef __PROSPERO__
+++    if ((unix_prot & PROT_EXEC) && size)
+++    {
+++        int can_write = (unix_prot & PROT_WRITE);
+++        if (!can_write && !mprotect( base, size, unix_prot | PROT_WRITE )) can_write = 1;
+++        if (can_write) pw_translate_syscalls( base, size );
+++    }
+++#endif
+++
++     return mprotect( base, size, unix_prot );
 + }
 + 
 +-- 
