@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: youss17x <a.fzc17@gmail.com>
+Date: Mon, 9 Nov 2026 18:45:00 +0100
+Subject: [PATCH 140/140] PC5: a page decommitted beside an inaccessible one is
+ cleared with its host page open, so NW.js games (Fear & Hunger) don't stop at
+ start (Wine patch 1008)
+
+---
+ ...ommitted-page-beside-a-protected-one.patch | 55 +++++++++++++++++++
+ 1 file changed, 55 insertions(+)
+ create mode 100644 wine/patches/1008-ntdll-clear-a-decommitted-page-beside-a-protected-one.patch
+
+diff --git a/wine/patches/1008-ntdll-clear-a-decommitted-page-beside-a-protected-one.patch b/wine/patches/1008-ntdll-clear-a-decommitted-page-beside-a-protected-one.patch
+new file mode 100644
+index 0000000..269d5ca
+--- /dev/null
++++ b/wine/patches/1008-ntdll-clear-a-decommitted-page-beside-a-protected-one.patch
+@@ -0,0 +1,55 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: youss17x <a.fzc17@gmail.com>
++Date: Mon, 9 Nov 2026 18:45:00 +0100
++Subject: [PATCH] ntdll: Clear a decommitted page beside a protected one with
++ its host page open.
++
++Patch 0893 clears the decommitted pages of a host page that keeps other
++pages committed, after making each one writable with mprotect_range().
++Since 0974, a committed read-only or inaccessible page takes writing, or
++all access, away from its whole host page, so a page beside one stayed
++closed and memset() faulted inside NtFreeVirtualMemory, where
++virtual_handle_fault cannot step over it: the call failed with
++STATUS_ACCESS_VIOLATION.
++
++Chromium's PartitionAlloc decommits pages beside inaccessible guard pages
++all the time and treats a failed decommit as fatal. NW.js games (RPG Maker
++MV, Fear & Hunger with --single-process) stopped on a breakpoint in nw.dll
++three seconds after starting: "Check failed:
++SetSystemPagesAccess(address, length, PageInaccessible)".
++
++The host page is now opened whole, keeping what its pages already allowed,
++for the clearing; decommit_pages() already gives every partial host page
++the protection its remaining pages need afterwards.
++---
++ dlls/ntdll/unix/virtual.c | 13 +++++++++++--
++ 1 file changed, 11 insertions(+), 2 deletions(-)
++
++diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
++index 7d1212d..58cf986 100644
++--- a/dlls/ntdll/unix/virtual.c
+++++ b/dlls/ntdll/unix/virtual.c
++@@ -3062,12 +3062,21 @@ static SIZE_T get_committed_size( struct file_view *view, void *base, size_t max
++  */
++ static NTSTATUS clear_committed_pages( char *start, char *end )
++ {
++-    char *page;
+++    char *page, *host_page;
+++    int prot;
++ 
++     for (page = start; page < end; page += page_size)
++     {
++         if (!(get_page_vprot( page ) & VPROT_COMMITTED)) continue;
++-        if (mprotect_range( page, page_size, VPROT_READ | VPROT_WRITE, VPROT_GUARD | VPROT_WRITEWATCH ))
+++        /* Open the whole host page. mprotect_range() would keep it closed when a
+++         * committed page beside this one is read-only or inaccessible (0974), and
+++         * memset() would then fault here, in the syscall, where virtual_handle_fault
+++         * cannot step over it. decommit_pages() gives the host page its protection
+++         * back once the pages are cleared. */
+++        host_page = ROUND_ADDR( page, host_page_mask );
+++        prot = get_unix_prot( get_host_page_vprot( page ) & ~(VPROT_GUARD | VPROT_WRITEWATCH) );
+++        if (mprotect_exec( host_page, host_page_size, prot | PROT_READ | PROT_WRITE ) &&
+++            mprotect( host_page, host_page_size, PROT_READ | PROT_WRITE ))
++             return STATUS_ACCESS_DENIED;
++         memset( page, 0, page_size );
++     }
+-- 
+2.43.0
+
