@@ -358,10 +358,21 @@ void pc5_log_notes(const char *text, size_t length, Pc5Buf *out)
     int tile = 0, vkd3d = 0, zink = 0;
     long long free_low = -1, dmem_peak = -1, dmem_failures = -1;
     double first_t = -1, last_t = -1;
+    char diagnostic[8][512];
+    int diagnostic_n = 0;
 
     while (text && line < end_of_text) {
         const char *end = memchr(line, '\n', (size_t)(end_of_text - line)), *found;
         if (!end) end = end_of_text;
+        if (diagnostic_n < 8 &&
+            ((found = after(line, end, "wine-ps5: exception ")) ||
+             (found = after(line, end, "wine-ps5: live-exec budget exhausted ")) ||
+             (found = after(line, end, "wine-ps5: live-exec stopped unsupported ")))) {
+            size_t n = (size_t)(end - found);
+            if (n >= sizeof(diagnostic[0])) n = sizeof(diagnostic[0])-1;
+            memcpy(diagnostic[diagnostic_n], found, n);
+            diagnostic[diagnostic_n++][n] = 0;
+        }
         if ((found = after(line, end, " t="))) {
             double t = strtod(found, NULL);
             if (first_t < 0) first_t = t;
@@ -524,6 +535,10 @@ void pc5_log_notes(const char *text, size_t length, Pc5Buf *out)
         pc5_buf_printf(out, "    %s%s", errors[top].text, errors[top].count > 1 ? "" : "\n");
         if (errors[top].count > 1) pc5_buf_printf(out, " (%d times)\n", errors[top].count);
         errors[top].count = 0;
+    }
+    if (diagnostic_n) {
+        pc5_buf_puts(out, "  Experimental diagnostics (observations, not a proven root cause):\n");
+        for (int i = 0; i < diagnostic_n; i++) pc5_buf_printf(out, "    %s\n", diagnostic[i]);
     }
     if (out->len == heading) out->len = before;
     free(modules);

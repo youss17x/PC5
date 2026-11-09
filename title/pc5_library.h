@@ -381,4 +381,8 @@ int pc5_recover_step(const char *root, Pc5Remove *remove, int budget_ms);
 /* Time since some fixed point, in milliseconds (the steps' clock). */
 uint64_t pc5_now_ms(void);
 
+/* Experimental per-game diagnostics. Separate from instruction rewriting and user channels. */
+int pc5_diagnostics_enabled(const char *root, const char *id);
+int pc5_diagnostics_set(const char *root, const char *id, int enabled);
+
 #endif

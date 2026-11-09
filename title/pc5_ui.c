@@ -204,17 +204,17 @@ typedef enum GameRow {
     GR_KNOWN, GR_COVER, GR_BACKGROUND, GR_HOME, GR_ICON, GR_MUSIC, GR_MUSIC_CLEAR,
     GR_BACKGROUND_IMAGE, GR_BACKGROUND_VIDEO, GR_VIDEO_CLEAR, GR_MEDIA_OPTIONS, GR_MUSIC_FILE, GR_VIDEO_FILE,
     GR_MEDIA, GR_LOADING, GR_LOADING_FILE, GR_LOADING_BACKGROUND, GR_LOADING_CLEAR,
-    GR_PROGRAM, GR_STEAM, GR_FILES, GR_UPDATE, GR_REPORT, GR_WORKS, GR_RESET, GR_UNINSTALL
+    GR_DIAGNOSTICS, GR_DIAGNOSTIC_MODE, GR_PROGRAM, GR_STEAM, GR_FILES, GR_UPDATE, GR_REPORT, GR_WORKS, GR_RESET, GR_UNINSTALL
 } GameRow;
-enum { GAME_ROWS = 8, GAME_PAGES = 9, GP_MAIN = 0, GP_GRAPHICS = 1, GP_APPEARANCE = 2, GP_MANAGE = 3, GP_BACKGROUND = 4,
-       GP_MUSIC = 5, GP_VIDEO = 6, GP_MEDIA = 7, GP_LOADING = 8 };
+enum { GAME_ROWS = 8, GAME_PAGES = 10, GP_MAIN = 0, GP_GRAPHICS = 1, GP_APPEARANCE = 2, GP_MANAGE = 3, GP_BACKGROUND = 4,
+       GP_MUSIC = 5, GP_VIDEO = 6, GP_MEDIA = 7, GP_LOADING = 8, GP_DIAGNOSTICS = 9 };
 static const char *const game_page_titles[GAME_PAGES] = { "", N_("Graphics"), N_("Appearance"), N_("Manage"), N_("Background"),
                                                         N_("Library music"), N_("Background video"),
-                                                        N_("Media settings and backup"), N_("Loading screen") };
+                                                        N_("Media settings and backup"), N_("Loading screen"), N_("Game diagnostics (experimental)") };
 /* The parent row that opens each page; Back returns to that row. */
 static int setting_about(Pc5Ui *ui, GameRow row, const char *lines[6]);
 static const GameRow game_page_rows[GAME_PAGES] = { GR_PLAY, GR_GRAPHICS, GR_APPEARANCE, GR_MANAGE, GR_BACKGROUND,
-                                                  GR_MUSIC, GR_BACKGROUND_VIDEO, GR_MEDIA, GR_LOADING };
+                                                  GR_MUSIC, GR_BACKGROUND_VIDEO, GR_MEDIA, GR_LOADING, GR_DIAGNOSTICS };
 /* What a game is, for its menu's rows. */
 enum { GAME_32BIT = 1, GAME_VULKAN = 2, GAME_PC5 = 4, GAME_API = 8, GAME_STEAM = 16, GAME_DXGI = 32, GAME_MEDIA = 64,
        GAME_KNOWN = 128 };
@@ -269,12 +269,16 @@ static int game_rows(const Pc5Controls *controls, int kind, int page, GameRow ro
         rows[n++] = GR_LOADING_BACKGROUND;
         rows[n++] = GR_LOADING_CLEAR;
         break;
+    case GP_DIAGNOSTICS:
+        if (kind & GAME_MEDIA) rows[n++] = GR_DIAGNOSTIC_MODE;
+        rows[n++] = GR_REPORT;
+        break;
     case GP_MANAGE:
         rows[n++] = GR_PROGRAM;
         if (kind & GAME_STEAM) rows[n++] = GR_STEAM;
         if (kind & GAME_PC5) rows[n++] = GR_FILES;
         if (kind & GAME_PC5) rows[n++] = GR_UPDATE;
-        rows[n++] = GR_REPORT;
+        rows[n++] = GR_DIAGNOSTICS;
         rows[n++] = GR_WORKS;
         /* Only a game PC5 installed has a Windows of its own to make new (8 rows at most). */
         if (kind & GAME_MEDIA) rows[n++] = GR_RESET;
@@ -5611,12 +5615,16 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         } else if ((k & accept) && row == GR_BACKGROUND && !(ui_game_kind(ui) & GAME_MEDIA)) {
             picture_open(ui, game, PICK_BACKGROUND);   /* no video for it: the picture, as before */
         } else if ((k & accept) && (row == GR_GRAPHICS || row == GR_APPEARANCE || row == GR_MANAGE || row == GR_BACKGROUND ||
-                                  row == GR_MUSIC || row == GR_BACKGROUND_VIDEO || row == GR_MEDIA || row == GR_LOADING)) {
+                                  row == GR_MUSIC || row == GR_BACKGROUND_VIDEO || row == GR_MEDIA || row == GR_LOADING || row == GR_DIAGNOSTICS)) {
             ui->game_page = row == GR_GRAPHICS ? GP_GRAPHICS : row == GR_APPEARANCE ? GP_APPEARANCE :
                             row == GR_BACKGROUND ? GP_BACKGROUND : row == GR_MUSIC ? GP_MUSIC :
                             row == GR_BACKGROUND_VIDEO ? GP_VIDEO : row == GR_MEDIA ? GP_MEDIA :
-                            row == GR_LOADING ? GP_LOADING : GP_MANAGE;
+                            row == GR_LOADING ? GP_LOADING : row == GR_DIAGNOSTICS ? GP_DIAGNOSTICS : GP_MANAGE;
             ui->menu = 0;
+            ui->dirty = 1;
+        } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_DIAGNOSTIC_MODE) {
+            if (pc5_diagnostics_set(ui->root, ui->launch_id, !pc5_diagnostics_enabled(ui->root, ui->launch_id)))
+                message(ui, 0, T("Game diagnostics (experimental)"), T("PC5 can't save the diagnostic setting."), S_GAME_MENU);
             ui->dirty = 1;
         } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_CONTROLLER) {
             int step = (k & PC5_KEY_LEFT) ? -1 : 1;
@@ -7449,6 +7457,16 @@ static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row,
         *text = T("A newer copy from USB; its saves and settings stay");
         *value = more;
         break;
+    case GR_DIAGNOSTICS:
+        *label = T("Game diagnostics (experimental)");
+        *text = T("Collect diagnostic details and prepare a problem report");
+        *value = more;
+        break;
+    case GR_DIAGNOSTIC_MODE:
+        *label = T("Diagnostic logging");
+        *text = T("Extra exception details in the saved log; may slow the game");
+        *value = pc5_diagnostics_enabled(ui->root, ui->launch_id) ? T("On") : T("Off");
+        break;
     case GR_REPORT:
         *label = T("Report a problem");
         *text = T("A QR code for GitHub's form, filled in from the game's newest log");
@@ -7483,6 +7501,12 @@ static int setting_about(Pc5Ui *ui, GameRow row, const char *lines[6])
 {
     int n = 0, api = ui_game_api(ui), bits32 = ui_game_kind(ui) & GAME_32BIT;
     switch (row) {
+    case GR_DIAGNOSTIC_MODE:
+        lines[n++] = T("Experimental: records extra exception information for this game.");
+        lines[n++] = T("Off by default. Turn it off after collecting a report.");
+        lines[n++] = T("The existing log size and retention limits still apply. Nothing is uploaded automatically.");
+        lines[n++] = T("It does not enable instruction rewriting or guarantee a root cause or a fix.");
+        break;
     case GR_CONTROLLER:
         lines[n++] = T("What the game sees when you play with the controller.");
         lines[n++] = T("Xbox controller: what most PC games expect. Try this first.");
@@ -7637,7 +7661,7 @@ static void game_menu_screen(Pc5Ui *ui, Pc5Canvas *c, int chosen)
     GameRow row = chosen >= 0 && chosen < count ? rows[chosen] : GR_PLAY;
     int changes = row == GR_CONTROLLER || row == GR_FRAMEGEN || row == GR_RESOLUTION || row == GR_ASPECT ||
                   row == GR_MEMORY || row == GR_VIDEO_MEMORY || row == GR_CPU_SHARING || row == GR_HOME || row == GR_STEAM ||
-                  row == GR_SOUND;
+                  row == GR_SOUND || row == GR_DIAGNOSTIC_MODE;
     const char *about_lines[6];
     int has_about = setting_about(ui, row, about_lines) > 0;
     Hint list[] = { { accept_glyph(ui), changes ? T("Change") : T("Choose") }, { back_glyph(ui), T("Back") },

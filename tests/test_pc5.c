@@ -1648,6 +1648,16 @@ static void test_install(void)
         profile = pw_wine_library_find(pw, "orbital-nine");
         CHECK(profile && !strcmp(profile->winedebug, "err+all,+loaddll,+process,+seh,+mmdevapi"), "its channels: %s",
               profile ? profile->winedebug : "-");
+        CHECK(!pc5_diagnostics_set(root, "orbital-nine", 1), "enable diagnostic logging");
+        CHECK(!pc5_profile_refresh(root, "orbital-nine", why, sizeof(why)), "diagnostic refresh: %s", why);
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "orbital-nine");
+        CHECK(profile && !strcmp(profile->winedebug, "err+all,+loaddll,+process,+seh"), "diagnostic channels applied");
+        CHECK(!pc5_diagnostics_set(root, "orbital-nine", 0), "disable diagnostic logging");
+        CHECK(!pc5_profile_refresh(root, "orbital-nine", why, sizeof(why)), "restored refresh: %s", why);
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "orbital-nine");
+        CHECK(profile && !strcmp(profile->winedebug, "err+all,+loaddll,+process,+seh,+mmdevapi"), "original channels restored");
         write_text(debug, "+seh; rm -rf /\n");
         CHECK(!pc5_profile_refresh(root, "orbital-nine", why, sizeof(why)), "refreshed: %s", why);
         pw_wine_library_load(pw, root);

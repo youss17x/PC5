@@ -714,6 +714,34 @@ static int index_update(const char *root, const char *file, int add)
     return status;
 }
 
+/* A versioned marker avoids interpreting arbitrary files as enabled. */
+static int diagnostics_path(const char *root, const char *id, char *out, size_t size)
+{
+    if (!root || !id || !*id) return -1;
+    for (const char *p = id; *p; p++)
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '-' || *p == '_')) return -1;
+    return pc5_format(out, size, "%s/prefixes/%s/pc5/diagnostics.txt", root, id);
+}
+int pc5_diagnostics_enabled(const char *root, const char *id)
+{
+    char path[PC5_PATH]; Pc5Buf text = {0};
+    static const char marker[] = "PC5_DIAGNOSTICS_1\n";
+    int on = !diagnostics_path(root, id, path, sizeof(path)) &&
+             !pc5_read_file(path, &text, sizeof(marker)) && text.len == sizeof(marker)-1 &&
+             !memcmp(text.data, marker, sizeof(marker)-1);
+    pc5_buf_free(&text); return on;
+}
+int pc5_diagnostics_set(const char *root, const char *id, int enabled)
+{
+    char path[PC5_PATH], dir[PC5_PATH];
+    if (diagnostics_path(root, id, path, sizeof(path))) return -1;
+    if (!enabled) return unlink(path) && errno != ENOENT ? -1 : 0;
+    pc5_copy(dir, sizeof(dir), path); *strrchr(dir, '/') = 0;
+    if (pc5_mkdirs(dir)) return -1;
+    return pc5_write_file(path, "PC5_DIAGNOSTICS_1\n", strlen("PC5_DIAGNOSTICS_1\n"));
+}
+
 /* The player's Wine log channels for one game, for a report that needs more than PC5 logs:
  * the first line of prefixes/<id>/pc5/winedebug.txt that isn't empty or a comment (# or ;),
  * in place of the title's (err+all,+loaddll,+process). "" when there is none, or when it
@@ -725,6 +753,10 @@ static void game_winedebug(const char *root, const char *id, char *out, size_t s
     Pc5Buf text = { 0 };
 
     out[0] = 0;
+    if (pc5_diagnostics_enabled(root, id)) {
+        pc5_copy(out, size, "err+all,+loaddll,+process,+seh");
+        return;
+    }
     if (pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/winedebug.txt", root, id) ||
         pc5_read_file(path, &text, 4096) || pc5_buf_terminate(&text)) {
         pc5_buf_free(&text);

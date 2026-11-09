@@ -65,6 +65,12 @@ cc "${common[@]}" -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all 
     title/pc5_upgrade.c title/pc5_sound.c title/pc5_video.c title/pc5_appearance.c title/pc5_compat.c title/pc5_look.c title/pc5_backgrounds.c title/pc5_tile.c title/pc5_dds.c title/pc5_files.c title/pc5_textdoc.c title/pc5_ftp.c title/pc5_web.c title/pc5_cab.c title/pc5_msi.c title/pc5_steam.c title/pc5_identity.c title/pc5_i18n.c title/pc5_child_wire.c tests/pc5_ftp_host.c "${upstream[@]}" "${text_sources[@]}" -lm -lpthread \
     -o "$out/test_pc5"
 "$out/test_pc5" "$out/work" tests/fixtures "$out/programs" "$out/covers" "$out/fonts.bin"
+# Diagnostics settings and bounded report extraction, without the UI's fixture state.
+cc "${common[@]}" -O1 -g -fsanitize=address,undefined -ffunction-sections -fdata-sections \
+    tests/test_diagnostics.c title/pc5_library.c title/pc5_logs.c title/pc5_base.c \
+    -Wl,--gc-sections -lm -lpthread -o "$out/test_diagnostics"
+"$out/test_diagnostics"
+
 
 # The INSTALL folder's FTP server as a client sees it: Python's ftplib against a server of its own.
 cc "${common[@]}" -O2 -DPC5_FTP_SERVE tests/pc5_ftp_host.c title/pc5_ftp.c title/pc5_base.c -lm -lpthread -o "$out/ftp-serve"

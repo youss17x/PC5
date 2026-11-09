@@ -1,0 +1,27 @@
+Experimental game diagnostics
+=============================
+Manage > Game diagnostics (experimental) > Diagnostic logging.
+Off by default. Available for PC5-managed games with an individual prefix.
+It selects err+all,+loaddll,+process,+seh for that game's generated profile.
+The player's winedebug.txt is never overwritten: switching off restores its
+normal effect at the next launch. Restart the game after changing this setting.
+The marker is prefixes/<id>/pc5/diagnostics.txt: PC5_DIAGNOSTICS_1 followed by LF.
+Other versions and malformed identifiers are rejected.
+
+Saved ZIP reports use the existing local log collector. about.txt now includes
+up to eight native exception/register or execution-trace stop observations,
+each capped at 511 bytes. Existing log size and seven-day retention limits
+remain in effect. Report a problem prepares a form; nothing is posted or
+uploaded automatically. An observed fault is not a proven root cause.
+
+This option does NOT create live-exec-trace.txt, patch the game, enable CPU
+single stepping, or activate syscall rewriting. The separate TRACE TEST
+program is a developer test, not a dependency of this menu. Expert execution
+tracing remains a separate opt-in experiment; its overhead and effects on
+self-modifying code make it unsuitable as a general diagnostic default.
+
+Validation: tests/test_diagnostics.c checks marker persistence, isolation,
+invalid IDs and bounded notes; tests/test_pc5.c verifies profile channels and
+restoration through the actual Wine profile parser. UI C compilation and
+translation catalog checks are also required. Console UI validation remains
+necessary before publishing as a release.
